@@ -384,7 +384,7 @@ pub struct Task {
 
 pub trait TaskFrame {
 	/// Create the initial stack frame for a new task
-	fn create_stack_frame(&mut self, func: extern "C" fn(usize), arg: usize);
+	fn create_stack_frame(&mut self, func: extern "C" fn(usize) -> i32, arg: usize);
 }
 
 impl Task {

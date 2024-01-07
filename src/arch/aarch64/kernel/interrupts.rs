@@ -401,3 +401,17 @@ pub(crate) fn print_statistics() {
 		}
 	}
 }
+
+#[no_mangle]
+pub(crate) extern "C" fn print_debug(state: &State) {
+	let spel0 = state.sp_el0;
+	let spsel = state.spsel;
+	let elr = state.elr_el1;
+	debug!("spel0: 0x{:x}, spsel:{}, elr: 0x{:x}", spel0, spsel, elr);
+	info!("sp: 0x{:p}", state as *const State);
+}
+
+#[no_mangle]
+pub(crate) extern "C" fn print_pointer(s: u64) {
+	info!("pointer: 0x{:x}", s);
+}

@@ -338,7 +338,7 @@ extern "C" fn task_start(_f: extern "C" fn(usize), _arg: usize) -> ! {
 }
 
 impl TaskFrame for Task {
-	fn create_stack_frame(&mut self, func: extern "C" fn(usize), arg: usize) {
+	fn create_stack_frame(&mut self, func: extern "C" fn(usize) -> i32, arg: usize) {
 		// Check if TLS is allocated already and if the task uses thread-local storage.
 		if self.tls.is_none() {
 			self.tls = TaskTLS::from_environment();
@@ -374,6 +374,7 @@ impl TaskFrame for Task {
 
 			// Set the task's stack pointer entry to the stack we have just crafted.
 			self.last_stack_pointer = stack;
+			info!("last stack pointer set in create_stask frame: {:p}", stack);
 
 			// initialize user-level stack
 			self.user_stack_pointer = self.stacks.get_user_stack()

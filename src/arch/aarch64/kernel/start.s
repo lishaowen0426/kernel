@@ -5,6 +5,8 @@
 .extern do_sync
 .extern do_error
 .extern get_last_stack_pointer
+.extern print_debug
+.extern print_pointer
 
 .macro trap_entry spsel
      stp x29, x30, [sp, #-16]!
@@ -36,6 +38,9 @@
 .endm
 
 .macro trap_exit
+
+      
+     
      ldp x22, x23, [sp], #16
      msr elr_el1, x23
 

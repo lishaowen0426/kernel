@@ -1,0 +1,16 @@
+{
+  "rust-analyzer": {
+    "showUnlinkedFileNotification": false,
+    "cargo": {
+      "noDefaultFeatures": { "enable": false },
+      "features": ["syscall"],
+      "target": "aarch64-unknown-none-softfloat",
+      "buildScripts": {
+        "enable": true
+      },
+      "procMacro": {
+        "enable": true
+      }
+    }
+  }
+}

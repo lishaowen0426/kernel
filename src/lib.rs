@@ -248,12 +248,12 @@ pub(crate) extern "C" fn __sys_free(ptr: *mut u8, size: usize, align: usize) {
 
 /// Entry point of a kernel thread, which initialize the libos
 #[cfg(target_os = "none")]
-extern "C" fn initd(_arg: usize) {
+extern "C" fn initd(_arg: usize) -> i32 {
 	extern "C" {
 		#[cfg(all(not(test), not(feature = "syscall")))]
 		fn runtime_entry(argc: i32, argv: *const *const u8, env: *const *const u8) -> !;
 		#[cfg(all(not(test), feature = "syscall"))]
-		fn main() -> !;
+		fn main() -> i32;
 		#[cfg(feature = "newlib")]
 		fn init_lwip();
 		#[cfg(feature = "newlib")]
@@ -299,7 +299,7 @@ extern "C" fn initd(_arg: usize) {
 		#[cfg(all(not(test), not(feature = "syscall")))]
 		runtime_entry(argc, argv, environ);
 		#[cfg(all(not(test), feature = "syscall"))]
-		main();
+		main()
 	}
 	#[cfg(test)]
 	test_main();

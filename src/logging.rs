@@ -35,7 +35,7 @@ pub unsafe fn init() {
 		Some("Trace") => LevelFilter::Trace,
 		Some("Warn") => LevelFilter::Warn,
 		Some("Info") => LevelFilter::Info,
-		_ => LevelFilter::Info,
+		_ => LevelFilter::Debug,
 	};
 	log::set_max_level(max_level);
 }

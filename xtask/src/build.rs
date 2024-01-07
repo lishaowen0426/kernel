@@ -57,6 +57,7 @@ impl Build {
 
 		eprintln!("Exporting hermit-builtins symbols");
 		let builtins = self.cargo_build.artifact.builtins_archive();
+		eprintln!("builtin archive: {:?}", builtins.as_ref());
 		let builtin_symbols = sh.read_file("hermit-builtins/exports")?;
 		builtins.retain_symbols(builtin_symbols.lines().collect::<HashSet<_>>())?;
 

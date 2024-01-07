@@ -194,7 +194,7 @@ impl PerCoreSchedulerExt for &mut PerCoreScheduler {
 
 struct NewTask {
 	tid: TaskId,
-	func: extern "C" fn(usize),
+	func: extern "C" fn(usize) -> i32,
 	arg: usize,
 	prio: Priority,
 	core_id: CoreId,
@@ -220,7 +220,7 @@ impl From<NewTask> for Task {
 impl PerCoreScheduler {
 	/// Spawn a new task.
 	pub fn spawn(
-		func: extern "C" fn(usize),
+		func: extern "C" fn(usize) -> i32,
 		arg: usize,
 		prio: Priority,
 		core_id: CoreId,
@@ -557,6 +557,7 @@ impl PerCoreScheduler {
 	/// available.
 	pub fn run() -> ! {
 		let backoff = Backoff::new();
+		info!("run lloop");
 
 		loop {
 			let core_scheduler = core_scheduler();
@@ -576,7 +577,7 @@ impl PerCoreScheduler {
 					backoff.snooze();
 				}
 			} else {
-				interrupts::enable();
+				//interrupts::enable();
 				core_scheduler.reschedule();
 				backoff.reset();
 			}
@@ -609,6 +610,10 @@ impl PerCoreScheduler {
 				borrowed.status,
 			)
 		};
+		debug!(
+			"current task info:\n	id = {id} last_stack_pointer = 0x{:x} status: {status:?}",
+			unsafe { *last_stack_pointer }
+		);
 
 		let mut new_task = None;
 
@@ -673,6 +678,8 @@ impl PerCoreScheduler {
 					self.current_task = task;
 				}
 
+				// here is actually pointer to task.last_stack_pointer
+				// not last_stack_pointer.
 				// Finally return the context of the new task.
 				#[cfg(not(target_arch = "riscv64"))]
 				return Some(last_stack_pointer);

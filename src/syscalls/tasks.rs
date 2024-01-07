@@ -223,7 +223,7 @@ pub extern "C" fn sys_signal(handler: SignalHandler) -> i32 {
 }
 
 extern "C" fn __sys_spawn2(
-	func: extern "C" fn(usize),
+	func: extern "C" fn(usize) -> i32,
 	arg: usize,
 	prio: u8,
 	stack_size: usize,
@@ -244,7 +244,7 @@ extern "C" fn __sys_spawn2(
 
 #[no_mangle]
 pub extern "C" fn sys_spawn2(
-	func: extern "C" fn(usize),
+	func: extern "C" fn(usize) -> i32,
 	arg: usize,
 	prio: u8,
 	stack_size: usize,
@@ -255,7 +255,7 @@ pub extern "C" fn sys_spawn2(
 
 extern "C" fn __sys_spawn(
 	id: *mut Tid,
-	func: extern "C" fn(usize),
+	func: extern "C" fn(usize) -> i32,
 	arg: usize,
 	prio: u8,
 	selector: isize,
@@ -274,7 +274,7 @@ extern "C" fn __sys_spawn(
 #[no_mangle]
 pub extern "C" fn sys_spawn(
 	id: *mut Tid,
-	func: extern "C" fn(usize),
+	func: extern "C" fn(usize) -> i32,
 	arg: usize,
 	prio: u8,
 	selector: isize,
