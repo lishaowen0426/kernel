@@ -10,7 +10,8 @@
       },
       "procMacro": {
         "enable": true
-      }
+      },
+      "unsetTest": ["hermit-kernel"]
     }
   }
 }
