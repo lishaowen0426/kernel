@@ -18,10 +18,10 @@
 #![feature(exposed_provenance)]
 #![feature(linked_list_cursors)]
 #![feature(maybe_uninit_slice)]
+#![feature(maybe_uninit_uninit_array)]
 #![feature(naked_functions)]
 #![feature(noop_waker)]
 #![feature(pointer_is_aligned)]
-#![feature(ptr_from_ref)]
 #![feature(slice_from_ptr_range)]
 #![cfg_attr(
 	any(target_arch = "aarch64", target_arch = "riscv64"),
@@ -79,6 +79,7 @@ mod arch;
 mod config;
 mod console;
 mod drivers;
+mod engine;
 mod entropy;
 mod env;
 pub mod errno;
@@ -273,19 +274,6 @@ extern "C" fn initd(_arg: usize) -> i32 {
 		info!("Hermit is running on uhyve!");
 	}
 
-	// Initialize Drivers
-	arch::init_drivers();
-	crate::executor::init();
-
-	// Initialize MMIO Drivers if on riscv64
-	#[cfg(target_arch = "riscv64")]
-	riscv64::kernel::init_drivers();
-
-	syscalls::init();
-	fd::init();
-	#[cfg(feature = "fs")]
-	fs::init();
-
 	// Get the application arguments and environment variables.
 	#[cfg(not(test))]
 	let (argc, argv, environ) = syscalls::get_application_parameters();
@@ -361,8 +349,30 @@ fn boot_processor_main() -> ! {
 		crate::drivers::pci::print_information();
 	}
 
+	// Initialize Drivers
+	arch::init_drivers();
+	crate::executor::init();
+
+	// Initialize MMIO Drivers if on riscv64
+	#[cfg(target_arch = "riscv64")]
+	riscv64::kernel::init_drivers();
+
+	syscalls::init();
+	fd::init();
+	#[cfg(feature = "fs")]
+	fs::init();
+
+	engine::init();
+
 	// Start the initd task.
-	scheduler::PerCoreScheduler::spawn(initd, 0, scheduler::task::NORMAL_PRIO, 0, USER_STACK_SIZE);
+	//scheduler::PerCoreScheduler::spawn(initd, 0, scheduler::task::NORMAL_PRIO, 0, USER_STACK_SIZE);
+	scheduler::PerCoreScheduler::spawn(
+		engine::workloop,
+		0,
+		scheduler::task::NORMAL_PRIO,
+		0,
+		USER_STACK_SIZE,
+	);
 
 	// Run the scheduler loop.
 	PerCoreScheduler::run();

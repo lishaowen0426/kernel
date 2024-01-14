@@ -1,4 +1,5 @@
 use alloc::vec::Vec;
+use core::mem::size_of;
 use core::{str, u32, u64, u8};
 
 use arm_gic::gicv3::{IntId, Trigger};
@@ -121,6 +122,77 @@ fn detect_pci_regions(dtb: &Dtb<'_>, parts: &[&str]) -> (u64, u64, u64) {
 	(io_start, mem32_start, mem64_start)
 }
 
+#[allow(unused_assignments)]
+fn detect_pci_regions2(dtb: &Dtb<'_>, parts: &[&str]) -> (u64, u64, u64) {
+	let size = dtb.get_property("/", "#address-cells").unwrap();
+	let parent_address_cells = u32::from_be_bytes(size.try_into().unwrap()) as usize;
+	let size = dtb
+		.get_property(parts.first().unwrap(), "#address-cells")
+		.unwrap();
+	let child_address_cells = u32::from_be_bytes(size.try_into().unwrap()) as usize;
+	let size = dtb
+		.get_property(parts.first().unwrap(), "#size-cells")
+		.unwrap();
+	let child_size_cells = u32::from_be_bytes(size.try_into().unwrap()) as usize;
+	info!("parent address cells: {:#04x}", parent_address_cells);
+	info!("child address cells: {:#04x}", child_address_cells);
+	info!("child size cells: {:#04x}", child_size_cells);
+
+	let chunk_size: usize =
+		(child_address_cells + parent_address_cells + child_size_cells) * size_of::<u32>();
+
+	let pcie_ranges = dtb.get_property(parts.first().unwrap(), "ranges").unwrap();
+	assert!(pcie_ranges.len() % chunk_size == 0);
+
+	let mut io_start: u64 = 0;
+	let mut mem32_start: u64 = 0;
+	let mut mem64_start: u64 = 0;
+
+	let pw = (2 * parent_address_cells * size_of::<u32>()) as usize;
+
+	for chunk in pcie_ranges.chunks(chunk_size) {
+		let (child_address, rest) = chunk.split_at(child_address_cells * size_of::<u32>());
+		let (parent_address, region_size) = rest.split_at(parent_address_cells * size_of::<u32>());
+
+		let (bitfield, child_address) = child_address.split_at(size_of::<u32>());
+
+		match bitfield[0] & 0b11 {
+			0b00 => debug!("configuration space"),
+			0b01 => {
+				if (io_start != 0) {
+					panic!("io_start has been set");
+				}
+				io_start = u64::from_be_bytes(parent_address.try_into().unwrap());
+				info!("I/O space: 0x{:0pw$x}", io_start);
+			}
+			0b10 => {
+				if (mem32_start != 0) {
+					panic!("mem32_start has been set");
+				}
+				mem32_start = u64::from_be_bytes(parent_address.try_into().unwrap());
+				info!("32bit memory space: 0x{:0pw$x}", mem32_start);
+			}
+			0b11 => {
+				if (mem64_start != 0) {
+					panic!("mem64_start has been set");
+				}
+				mem64_start = u64::from_be_bytes(parent_address.try_into().unwrap());
+				info!("64bit memory space: 0x{:0pw$x}", mem64_start);
+			}
+			_ => panic!("unknown space code"),
+		}
+
+		/*
+		info!(
+			"child_address:0x{:0pw$x},parent_address:0x{:0pw$x}, size:{}",
+			u64::from_be_bytes(child_address.try_into().unwrap()),
+			u64::from_be_bytes(parent_address.try_into().unwrap()),
+			u64::from_be_bytes(region_size.try_into().unwrap()),
+		);
+		*/
+	}
+	(io_start, mem32_start, mem64_start)
+}
 #[allow(unused_assignments)]
 fn detect_interrupt(
 	bus: u32,
@@ -260,6 +332,8 @@ pub fn init() {
 					(size / BasePageSize::SIZE).try_into().unwrap(),
 					flags,
 				);
+
+				detect_pci_regions2(&dtb, &parts);
 
 				let (mut io_start, mem32_start, mut mem64_start) = detect_pci_regions(&dtb, &parts);
 

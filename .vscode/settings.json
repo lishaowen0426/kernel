@@ -1,7 +1,12 @@
 {
   "rust-analyzer": {
     "showUnlinkedFileNotification": false,
+    "imports": {
+      "preferNoStd": true
+    },
     "cargo": {
+      "sysroot": "/Users/lsw/Code/hermit/rust/build/aarch64-apple-darwin/stage2",
+      "sysrootSrc": "/Users/lsw/Code/hermit/rust/build/host/stage2/lib/rustlib/src/rust/library",
       "noDefaultFeatures": { "enable": false },
       "features": ["syscall"],
       "target": "aarch64-unknown-none-softfloat",
