@@ -66,6 +66,17 @@ pub trait SyscallInterface: Send + Sync {
 			.map_or_else(|e| -num::ToPrimitive::to_i32(&e).unwrap(), |_| 0)
 	}
 
+	fn set_permission(&self, name: *const u8, perm: u32) -> i32 {
+		let name = unsafe { CStr::from_ptr(name as _) }.to_str().unwrap();
+		debug!("set_permission {}", name);
+
+		fs::FILESYSTEM
+			.lock()
+			.set_permission(name, perm)
+			.map_or_else(|e| -num::ToPrimitive::to_i32(&e).unwrap(), |_| 0)
+	}
+
+
 	#[cfg(target_arch = "x86_64")]
 	fn rmdir(&self, name: *const u8) -> i32 {
 		let name = unsafe { CStr::from_ptr(name as _) }.to_str().unwrap();

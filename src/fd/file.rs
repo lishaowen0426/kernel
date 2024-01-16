@@ -127,6 +127,11 @@ impl ObjectInterface for GenericFile {
 
 		ret
 	}
+
+    /// permission
+	fn set_permission(&self, perm: u32) -> i32{
+		unimplemented!()
+	}
 }
 
 impl Drop for GenericFile {

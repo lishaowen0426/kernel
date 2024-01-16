@@ -108,6 +108,15 @@ pub extern "C" fn sys_unlink(name: *const u8) -> i32 {
 	kernel_function!(__sys_unlink(name))
 }
 
+extern "C" fn __sys_set_permission(name: *const u8, perm: u32) -> i32 {
+	SYS.set_permission(name, perm)
+}
+
+#[no_mangle]
+pub extern "C" fn sys_set_permission(name: *const u8, perm: u32) -> i32 {
+	kernel_function!(__sys_set_permission(name, perm))
+}
+
 #[cfg(target_arch = "x86_64")]
 extern "C" fn __sys_mkdir(name: *const u8, mode: u32) -> i32 {
 	SYS.mkdir(name, mode)

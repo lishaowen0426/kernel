@@ -230,6 +230,11 @@ pub trait ObjectInterface: Sync + Send + core::fmt::Debug + DynClone {
 		-EINVAL
 	}
 
+	/// `set_permission`
+	fn set_permission(&self, _perm: u32) -> i32 {
+		-EINVAL
+	}
+
 	/// 'readdir' returns a pointer to a dirent structure
 	/// representing the next directory entry in the directory stream
 	/// pointed to by the file descriptor

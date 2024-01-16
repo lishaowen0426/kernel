@@ -1,4 +1,8 @@
+// doc: https://www.openfirmware.info/data/docs/bus.pci.pdf
+
 use alloc::vec::Vec;
+use core::convert::TryFrom;
+use core::iter::Iterator;
 use core::mem::size_of;
 use core::{str, u32, u64, u8};
 
@@ -6,23 +10,75 @@ use arm_gic::gicv3::{IntId, Trigger};
 use bit_field::BitField;
 use hermit_dtb::Dtb;
 use pci_types::{
-	Bar, ConfigRegionAccess, InterruptLine, InterruptPin, PciAddress, PciHeader, MAX_BARS,
+	Bar, ConfigRegionAccess, InterruptLine, InterruptPin, PciAddress, PciHeader, VendorId, MAX_BARS,
 };
 
 use crate::arch::aarch64::kernel::interrupts::GIC;
 use crate::arch::aarch64::mm::paging::{self, BasePageSize, PageSize, PageTableEntryFlags};
 use crate::arch::aarch64::mm::{virtualmem, PhysAddr, VirtAddr};
-use crate::drivers::pci::{PciCommand, PciDevice, PCI_DEVICES};
+use crate::drivers::pci::{PciBitfield, PciCommand, PciDevice, PCI_DEVICES};
 use crate::kernel::boot_info;
 
 const PCI_MAX_DEVICE_NUMBER: u8 = 32;
 const PCI_MAX_FUNCTION_NUMBER: u8 = 8;
 
 #[derive(Debug, Copy, Clone)]
-pub(crate) struct PciConfigRegion(VirtAddr);
+pub struct PciConfigRegion(VirtAddr);
+
+pub struct PciConfigRegionIter {
+	/*
+	cfg_offset(bus, device, function, register) =
+				   bus << 20 | device << 15 | function << 12 | register
+	 */
+	bus_end: u8,
+	end_of_iteration: bool,
+
+	//next to be probed
+	bus: u8, //8bits
+	dev: u8, //5bits
+	         // register: 8bits
+}
+
+impl PciConfigRegionIter {
+	pub fn new(bus_end: u8) -> Self {
+		Self {
+			bus_end,
+			end_of_iteration: false,
+			bus: 0,
+			dev: 0,
+		}
+	}
+}
+
+impl Iterator for PciConfigRegionIter {
+	type Item = PciAddress;
+
+	fn next(&mut self) -> Option<Self::Item> {
+		if self.end_of_iteration {
+			return None;
+		}
+
+		//currently only single-function device is supported
+		let probe_addr = PciAddress::new(0, self.bus, self.dev, 0);
+
+		if self.bus == self.bus_end && self.dev == 0b11111 {
+			self.end_of_iteration = true;
+		} else if self.dev < 0b11111 {
+			self.dev += 1;
+		} else {
+			self.bus += 1;
+			self.dev = 0;
+		}
+
+		return Some(probe_addr);
+	}
+}
 
 impl PciConfigRegion {
 	pub const fn new(addr: VirtAddr) -> Self {
+		// in qemu, the pci dtb compatible property is 'pci-host-ecam-generic'
+		// which requires the configuration space base address to be aligned to 28bits
+		// check https://www.kernel.org/doc/Documentation/devicetree/bindings/pci/host-generic-pci.txt
 		assert!(addr.as_u64() & 0xFFFFFFF == 0, "Unaligned PCI Config Space");
 		Self(addr)
 	}
@@ -34,7 +90,7 @@ impl PciConfigRegion {
 			| u64::from(pci_addr.device()) << 15
 			| u64::from(pci_addr.function()) << 12
 			| (u64::from(offset) & 0xFFF)
-			| self.0.as_u64()) as usize
+			| self.0.as_u64()) as usize // this is the base address
 	}
 }
 
@@ -155,25 +211,29 @@ fn detect_pci_regions2(dtb: &Dtb<'_>, parts: &[&str]) -> (u64, u64, u64) {
 		let (parent_address, region_size) = rest.split_at(parent_address_cells * size_of::<u32>());
 
 		let (bitfield, child_address) = child_address.split_at(size_of::<u32>());
+		info!(
+			"child address: 0x{:x}",
+			u64::from_be_bytes(child_address.try_into().unwrap())
+		);
 
 		match bitfield[0] & 0b11 {
 			0b00 => debug!("configuration space"),
 			0b01 => {
-				if (io_start != 0) {
+				if io_start != 0 {
 					panic!("io_start has been set");
 				}
 				io_start = u64::from_be_bytes(parent_address.try_into().unwrap());
 				info!("I/O space: 0x{:0pw$x}", io_start);
 			}
 			0b10 => {
-				if (mem32_start != 0) {
+				if mem32_start != 0 {
 					panic!("mem32_start has been set");
 				}
 				mem32_start = u64::from_be_bytes(parent_address.try_into().unwrap());
 				info!("32bit memory space: 0x{:0pw$x}", mem32_start);
 			}
 			0b11 => {
-				if (mem64_start != 0) {
+				if mem64_start != 0 {
 					panic!("mem64_start has been set");
 				}
 				mem64_start = u64::from_be_bytes(parent_address.try_into().unwrap());
@@ -320,9 +380,17 @@ pub fn init() {
 				let (slice, _residual_slice) = residual_slice.split_at(core::mem::size_of::<u64>());
 				let size = u64::from_be_bytes(slice.try_into().unwrap());
 
+				let bus_range = dtb
+					.get_property(parts.first().unwrap(), "bus-range")
+					.unwrap();
+				let (bus_start, bus_end) = bus_range.split_at(bus_range.len() / 2);
+				let bus_end = u32::from_be_bytes(bus_end.try_into().unwrap());
+
+				info!("PCI configuration space physical address: 0x{:p}", addr);
+
 				let pci_address =
 					virtualmem::allocate_aligned(size.try_into().unwrap(), 0x10000000).unwrap();
-				info!("Mapping PCI Enhanced Configuration Space interface to virtual address {:p} (size {:#X})", pci_address, size);
+				info!("Mapping PCI Enhanced Configuration Space interface to virtual address 0x{:p} (size {:#X})", pci_address, size);
 
 				let mut flags = PageTableEntryFlags::empty();
 				flags.device().writable().execute_disable();
@@ -333,9 +401,8 @@ pub fn init() {
 					flags,
 				);
 
-				detect_pci_regions2(&dtb, &parts);
-
-				let (mut io_start, mem32_start, mut mem64_start) = detect_pci_regions(&dtb, &parts);
+				let (mut io_start, mem32_start, mut mem64_start) =
+					detect_pci_regions2(&dtb, &parts);
 
 				debug!("IO address space starts at{:#X}", io_start);
 				debug!("Memory32 address space starts at {:#X}", mem32_start);
@@ -344,84 +411,83 @@ pub fn init() {
 				assert!(mem32_start > 0);
 				assert!(mem64_start > 0);
 
-				let max_bus_number = size
-					/ (PCI_MAX_DEVICE_NUMBER as u64
-						* PCI_MAX_FUNCTION_NUMBER as u64
-						* BasePageSize::SIZE);
-				info!("Scanning PCI Busses 0 to {}", max_bus_number - 1);
-
 				let pci_config = PciConfigRegion::new(pci_address);
-				for bus in 0..max_bus_number {
-					for device in 0..PCI_MAX_DEVICE_NUMBER {
-						let pci_address = PciAddress::new(0, bus.try_into().unwrap(), device, 0);
-						let header = PciHeader::new(pci_address);
 
-						let (device_id, vendor_id) = header.id(&pci_config);
-						if device_id != u16::MAX && vendor_id != u16::MAX {
-							let dev = PciDevice::new(pci_address, pci_config);
-
-							// Initializes BARs
-							let mut cmd = PciCommand::default();
-							for i in 0..MAX_BARS {
-								if let Some(bar) = dev.get_bar(i.try_into().unwrap()) {
-									match bar {
-										Bar::Io { .. } => {
-											dev.set_bar(
-												i.try_into().unwrap(),
-												Bar::Io {
-													port: io_start.try_into().unwrap(),
-												},
-											);
-											io_start += 0x20;
-											cmd |= PciCommand::PCI_COMMAND_IO
-												| PciCommand::PCI_COMMAND_MASTER;
-										}
-										// Currently, we ignore 32 bit memory bars
-										/*Bar::Memory32 { address, size, prefetchable } => {
-											dev.set_bar(i.try_into().unwrap(), Bar::Memory32 { address: mem32_start.try_into().unwrap(), size,  prefetchable });
-											mem32_start += u64::from(size);
-											cmd |= PciCommand::PCI_COMMAND_MEMORY|PciCommand::PCI_COMMAND_MASTER;
-										}*/
+				//scan PCIE
+				let pci_iter = PciConfigRegionIter::new(bus_end.try_into().unwrap());
+				for pa in pci_iter {
+					let pd = PciHeader::new(pa);
+					let (vendor_id, device_id) = pd.id(&pci_config);
+					let (header, has_multiple_functions) = (
+						pd.header_type(&pci_config),
+						pd.has_multiple_functions(&pci_config),
+					);
+					if device_id != 0xFFFF {
+						info!("device id: 0x{:x}, vendor id: 0x{:x}, header: {:?}, has_multiple_functions: {}", device_id, vendor_id, header, has_multiple_functions);
+					} else {
+						continue;
+					}
+					let dev = PciDevice::new(pa, pci_config);
+					// Initializes BARs
+					let mut cmd = PciCommand::default();
+					for i in 0..MAX_BARS {
+						if let Some(bar) = dev.get_bar(i.try_into().unwrap()) {
+							info!("Bar: {:?}", bar);
+							match bar {
+								Bar::Io { .. } => {
+									dev.set_bar(
+										i.try_into().unwrap(),
+										Bar::Io {
+											port: io_start.try_into().unwrap(),
+										},
+									);
+									io_start += 0x20;
+									cmd |=
+										PciCommand::PCI_COMMAND_IO | PciCommand::PCI_COMMAND_MASTER;
+								}
+								// Currently, we ignore 32 bit memory bars
+								/*Bar::Memory32 { address, size, prefetchable } => {
+									dev.set_bar(i.try_into().unwrap(), Bar::Memory32 { address: mem32_start.try_into().unwrap(), size,  prefetchable });
+									mem32_start += u64::from(size);
+									cmd |= PciCommand::PCI_COMMAND_MEMORY|PciCommand::PCI_COMMAND_MASTER;
+								}*/
+								Bar::Memory64 {
+									address: _,
+									size,
+									prefetchable,
+								} => {
+									dev.set_bar(
+										i.try_into().unwrap(),
 										Bar::Memory64 {
-											address: _,
+											address: mem64_start,
 											size,
 											prefetchable,
-										} => {
-											dev.set_bar(
-												i.try_into().unwrap(),
-												Bar::Memory64 {
-													address: mem64_start,
-													size,
-													prefetchable,
-												},
-											);
-											mem64_start += size;
-											cmd |= PciCommand::PCI_COMMAND_MEMORY
-												| PciCommand::PCI_COMMAND_MASTER;
-										}
-										_ => {}
-									}
+										},
+									);
+									mem64_start += size;
+									cmd |= PciCommand::PCI_COMMAND_MEMORY
+										| PciCommand::PCI_COMMAND_MASTER;
 								}
-							}
-							dev.set_command(cmd);
-
-							if let Some((pin, line)) = detect_interrupt(
-								bus.try_into().unwrap(),
-								device.into(),
-								&dtb,
-								&parts,
-							) {
-								debug!(
-									"Initialize interrupt pin {} and line {} for device {}",
-									pin, line, device_id
-								);
-								dev.set_irq(pin, line);
-							}
-
-							unsafe {
-								PCI_DEVICES.push(dev);
+								_ => {}
 							}
 						}
+					}
+					dev.set_command(cmd);
+
+					let (bus, device) = (pa.bus(), pa.device());
+
+					if let Some((pin, line)) =
+						detect_interrupt(bus.try_into().unwrap(), device.into(), &dtb, &parts)
+					{
+						debug!(
+							"Initialize interrupt pin {} and line {} for device {}",
+							pin, line, device_id
+						);
+						dev.set_irq(pin, line);
+					}
+
+					unsafe {
+						PCI_DEVICES.push(dev);
 					}
 				}
 

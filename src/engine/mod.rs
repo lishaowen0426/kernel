@@ -1,7 +1,7 @@
 use alloc::string::String;
 use core::convert::Into;
 use core::fmt::{Debug, Display};
-const WASM_FILE: &'static [u8; 2215503] = include_bytes!(
+const WASM_FILE: &'static [u8; 2517579] = include_bytes!(
 	"/Users/lsw/Code/hermit/wasi_hello_world/target/wasm32-wasi/debug/wasi_hello_world.wasm"
 );
 

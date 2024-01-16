@@ -201,6 +201,10 @@ impl PosixFileSystem for Fuse {
 
 		Ok(())
 	}
+	fn set_permission(&self, path: &str, perm: u32) -> Result<(), FileError> {
+		debug!("FUSE set_permission: {}", path);
+		Err(FileError::ENOSYS)
+	}
 }
 
 impl Fuse {

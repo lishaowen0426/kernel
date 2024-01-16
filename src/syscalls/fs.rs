@@ -174,6 +174,13 @@ impl Filesystem {
 		Ok(())
 	}
 
+	pub fn set_permission(&mut self, path: &str, perm: u32) -> Result<(), FileError> {
+		debug!("set permission {}", path);
+		let (fs, internal_path) = self.parse_path(path)?;
+		fs.set_permission(internal_path, perm)?;
+		Ok(())
+	}
+
 	/// Remove directory given by path
 	#[allow(dead_code)]
 	pub fn rmdir(&mut self, path: &str) -> Result<(), FileError> {
@@ -265,6 +272,7 @@ pub trait PosixFileSystem {
 	fn open(&self, _path: &str, _perms: FilePerms) -> Result<Box<dyn PosixFile + Send>, FileError>;
 	fn opendir(&self, path: &str) -> Result<Box<dyn PosixFile + Send>, FileError>;
 	fn unlink(&self, _path: &str) -> Result<(), FileError>;
+	fn set_permission(&self, _path: &str, perm: u32) -> Result<(), FileError>;
 
 	fn rmdir(&self, _path: &str) -> Result<(), FileError>;
 	fn mkdir(&self, name: &str, mode: u32) -> Result<i32, FileError>;
@@ -283,7 +291,7 @@ pub trait PosixFile {
 }
 
 #[repr(C)]
-#[derive(Debug, Copy, Clone)]
+#[derive(Debug, Copy, Clone, Default)]
 pub struct FileAttr {
 	pub st_dev: u64,
 	pub st_ino: u64,
@@ -301,6 +309,8 @@ pub struct FileAttr {
 	pub st_mtime_nsec: i64,
 	pub st_ctime: i64,
 	pub st_ctime_nsec: i64,
+	pub st_birthtime: i64,
+	pub st_birthtime_nsec: i64,
 }
 
 #[derive(Debug, FromPrimitive, ToPrimitive)]

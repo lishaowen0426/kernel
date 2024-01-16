@@ -1,6 +1,7 @@
 #![allow(dead_code)]
 
 use alloc::vec::Vec;
+use core::convert::TryFrom;
 use core::fmt;
 
 use bitflags::bitflags;
@@ -31,6 +32,49 @@ use crate::drivers::virtio::transport::pci as pci_virtio;
 ))]
 use crate::drivers::virtio::transport::pci::VirtioDriver;
 
+#[derive(Default, Debug, Copy, Clone)]
+pub struct PciBitfield {
+	relocatable: bool,
+	prefetchable: bool,
+	aliased: bool,
+	ss: u8,
+	bus: u8,
+	dev: u8,
+	function: u8,
+	reg: u8,
+}
+
+impl TryFrom<&[u8]> for PciBitfield {
+	type Error = error::PciError;
+
+	fn try_from(value: &[u8]) -> Result<Self, Self::Error> {
+		if value.len() != 4 {
+			Err(error::PciError::General(0))
+		} else if value[0] & 0b11100 != 0 {
+			//safety check
+			Err(error::PciError::General(0))
+		} else {
+			let relocatable = (value[0] & 0b10000000) == 0; // 0: relocatable
+			let prefetchable = (value[0] & 0b01000000) != 0; //1: prefetchable
+			let aliased = (value[0] & 0b00100000) != 0; //1: aliased
+			let ss: u8 = value[0] & 0b11;
+			let bus: u8 = value[1];
+			let dev: u8 = value[2] >> 3;
+			let function: u8 = value[2] & 0b111;
+			let reg: u8 = value[3];
+			Ok(Self {
+				relocatable,
+				prefetchable,
+				aliased,
+				ss,
+				bus,
+				dev,
+				function,
+				reg,
+			})
+		}
+	}
+}
 /// Converts a given little endian coded u32 to native endian coded.
 //
 // INFO: As the endianness received from the device is little endian coded
@@ -147,11 +191,11 @@ impl From<Masks> for u32 {
 	}
 }
 
-pub(crate) static mut PCI_DEVICES: Vec<PciDevice<PciConfigRegion>> = Vec::new();
+pub static mut PCI_DEVICES: Vec<PciDevice<PciConfigRegion>> = Vec::new();
 static mut PCI_DRIVERS: Vec<PciDriver> = Vec::new();
 
 #[derive(Copy, Clone, Debug)]
-pub(crate) struct PciDevice<T: ConfigRegionAccess> {
+pub struct PciDevice<T: ConfigRegionAccess> {
 	address: PciAddress,
 	access: T,
 }
