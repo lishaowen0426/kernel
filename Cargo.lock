@@ -490,6 +490,7 @@ dependencies = [
  "num",
  "num-derive",
  "num-traits",
+ "once_cell",
  "pci-ids",
  "pci_types",
  "pflock",
@@ -505,6 +506,7 @@ dependencies = [
  "time",
  "trapframe",
  "uart_16550",
+ "virtio-drivers",
  "wasmi",
  "x86",
  "x86_64",
@@ -1316,6 +1318,15 @@ name = "version_check"
 version = "0.9.4"
 source = "registry+https://github.com/rust-lang/crates.io-index"
 checksum = "49874b5167b65d7193b8aba1567f5c7d93d001cafc34600cee003eda787e483f"
+
+[[package]]
+name = "virtio-drivers"
+version = "0.7.1"
+dependencies = [
+ "bitflags 2.4.1",
+ "log",
+ "zerocopy",
+]
 
 [[package]]
 name = "void"

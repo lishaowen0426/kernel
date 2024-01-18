@@ -1,20 +1,32 @@
 #![allow(dead_code)]
 
+use alloc::alloc::{alloc_zeroed, dealloc, handle_alloc_error};
 use alloc::vec::Vec;
+use core::alloc::Layout;
 use core::convert::TryFrom;
 use core::fmt;
+use core::ptr::NonNull;
 
+use aarch64::regs::MIDR_EL1::Revision;
 use bitflags::bitflags;
 use hermit_sync::without_interrupts;
 #[cfg(any(feature = "tcp", feature = "udp", feature = "fs"))]
 use hermit_sync::InterruptTicketMutex;
 use pci_types::{
-	Bar, ConfigRegionAccess, DeviceId, EndpointHeader, InterruptLine, InterruptPin, PciAddress,
-	PciHeader, VendorId, MAX_BARS,
+	Bar, BaseClass, ConfigRegionAccess, DeviceId, DeviceRevision, EndpointHeader, HeaderType,
+	Interface, InterruptLine, InterruptPin, PciAddress, PciHeader, SubClass, VendorId, MAX_BARS,
 };
+use virtio_drivers::device::blk::VirtIOBlk;
+use virtio_drivers::device::net::VirtIONetRaw;
+use virtio_drivers::transport::pci::bus::{self, Cam, DeviceFunction, DeviceFunctionInfo, PciRoot};
+use virtio_drivers::transport::pci::{virtio_device_type, PciTransport};
+use virtio_drivers::transport::{DeviceType, Transport};
+use virtio_drivers::{self, BufferDirection, PAGE_SIZE};
 
-use crate::arch::mm::{PhysAddr, VirtAddr};
-use crate::arch::pci::PciConfigRegion;
+use crate::aarch64::mm::paging;
+use crate::arch::mm::paging::{virtual_to_physical, BasePageSize, PageSize, PageTableEntryFlags};
+use crate::arch::mm::{virtualmem, PhysAddr, VirtAddr};
+use crate::arch::pci::{PciConfigRegion, PCI_ROOT_ADDR};
 #[cfg(feature = "fs")]
 use crate::drivers::fs::virtio_fs::VirtioFsDriver;
 #[cfg(feature = "rtl8139")]
@@ -279,6 +291,10 @@ impl<T: ConfigRegionAccess> PciDevice<T> {
 			} => {
 				let high: u32 = (address >> 32).try_into().unwrap();
 				let low: u32 = (address & 0xFFFF_FFF0u64).try_into().unwrap();
+				info!(
+					"address: 0x{:x}, high:0x{:x}, low:0x{:x}, prefetchable:{}",
+					address, high, low, prefetchable
+				);
 				if prefetchable {
 					unsafe {
 						self.access.write(self.address, cmd, low | 2 << 1 | 1 << 3);
@@ -402,6 +418,16 @@ impl<T: ConfigRegionAccess> PciDevice<T> {
 		let header = PciHeader::new(self.address);
 		header.id(&self.access)
 	}
+
+	pub fn revision_and_class(&self) -> (DeviceRevision, BaseClass, SubClass, Interface) {
+		let header = PciHeader::new(self.address);
+		header.revision_and_class(&self.access)
+	}
+
+	pub fn header_type(&self) -> HeaderType {
+		let header = PciHeader::new(self.address);
+		header.header_type(&self.access)
+	}
 }
 
 impl<T: ConfigRegionAccess> fmt::Display for PciDevice<T> {
@@ -450,7 +476,8 @@ impl<T: ConfigRegionAccess> fmt::Display for PciDevice<T> {
 			)?;
 
 			// If the devices uses an IRQ, output this one as well.
-			let (_, irq) = endpoint.interrupt(&self.access);
+			let (pin, irq) = endpoint.interrupt(&self.access);
+			write!(f, "irq pin: {}, irq line:{}", pin, irq);
 			if irq != 0 && irq != u8::MAX {
 				write!(f, ", IRQ {irq}")?;
 			}
@@ -572,9 +599,156 @@ pub(crate) fn get_filesystem_driver() -> Option<&'static InterruptTicketMutex<Vi
 	}
 }
 
+struct VirtioHal;
+unsafe impl virtio_drivers::Hal for VirtioHal {
+	fn dma_alloc(
+		pages: usize,
+		direction: BufferDirection,
+	) -> (virtio_drivers::PhysAddr, NonNull<u8>) {
+		let layout =
+			Layout::from_size_align(pages * virtio_drivers::PAGE_SIZE, virtio_drivers::PAGE_SIZE)
+				.unwrap();
+		// Safe because the layout has a non-zero size.
+		let vaddr = unsafe { alloc_zeroed(layout) };
+		let vaddr = if let Some(vaddr) = NonNull::new(vaddr) {
+			vaddr
+		} else {
+			handle_alloc_error(layout)
+		};
+		let paddr = virtual_to_physical(VirtAddr::from_u64(vaddr.as_ptr() as u64)).unwrap();
+		(paddr.as_usize(), vaddr)
+	}
+
+	unsafe fn dma_dealloc(
+		paddr: virtio_drivers::PhysAddr,
+		vaddr: NonNull<u8>,
+		pages: usize,
+	) -> i32 {
+		let layout = Layout::from_size_align(pages * PAGE_SIZE, PAGE_SIZE).unwrap();
+		// Safe because the memory was allocated by `dma_alloc` above using the same allocator, and
+		// the layout is the same as was used then.
+		unsafe {
+			dealloc(vaddr.as_ptr(), layout);
+		}
+		0
+	}
+
+	unsafe fn mmio_phys_to_virt(paddr: virtio_drivers::PhysAddr, size: usize) -> NonNull<u8> {
+		let align_up =
+			|value: usize, alignment: usize| -> usize { ((value - 1) | (alignment - 1)) + 1 };
+		let page_count =
+			align_up(size, BasePageSize::SIZE as usize) / (BasePageSize::SIZE as usize);
+		let vaddr = virtualmem::allocate_aligned(size, size).unwrap();
+		let mut flags = PageTableEntryFlags::empty();
+		flags.device().writable().execute_disable();
+		paging::map::<BasePageSize>(
+			vaddr,
+			PhysAddr::from(paddr),
+			page_count.try_into().unwrap(),
+			flags,
+		);
+		NonNull::new(vaddr.as_mut_ptr::<u8>()).unwrap()
+	}
+
+	unsafe fn share(buffer: NonNull<[u8]>, direction: BufferDirection) -> virtio_drivers::PhysAddr {
+		let vaddr = VirtAddr::from_u64(buffer.as_ptr() as *mut u8 as u64);
+		let paddr = paging::get_physical_address::<BasePageSize>(vaddr).unwrap();
+		paddr.as_usize()
+	}
+
+	unsafe fn unshare(
+		_paddr: virtio_drivers::PhysAddr,
+		_buffer: NonNull<[u8]>,
+		_direction: BufferDirection,
+	) {
+	}
+}
+
+fn virtio_net<T: Transport>(transport: T) {
+	let mut net =
+		VirtIONetRaw::<VirtioHal, T, 16>::new(transport).expect("failed to create net driver");
+	let mut buf = [0u8; 2048];
+	let (hdr_len, pkt_len) = net.receive_wait(&mut buf).expect("failed to recv");
+	info!(
+		"recv {} bytes: {:02x?}",
+		pkt_len,
+		&buf[hdr_len..hdr_len + pkt_len]
+	);
+	net.send(&buf[..hdr_len + pkt_len]).expect("failed to send");
+	info!("virtio-net test finished");
+}
+
+fn virtio_blk<T: Transport>(transport: T) {
+	let mut blk = VirtIOBlk::<VirtioHal, T>::new(transport).expect("failed to create blk driver");
+	assert!(!blk.readonly());
+	let mut input = [0xffu8; 512];
+	let mut output = [0; 512];
+	for i in 0..32 {
+		for x in input.iter_mut() {
+			*x = i as u8;
+		}
+		blk.write_blocks(i, &input).expect("failed to write");
+		blk.read_blocks(i, &mut output).expect("failed to read");
+		assert_eq!(input, output);
+	}
+	info!("virtio-blk test finished");
+}
+
+fn virtio_device(transport: impl Transport) {
+	match transport.device_type() {
+		DeviceType::Block => virtio_blk(transport),
+		t => warn!("Unrecognized virtio device: {:?}", t),
+	}
+}
+pub(crate) fn init_virtio_drivers() {
+	unsafe {
+		for dev in PCI_DEVICES.iter() {
+			let (revision, class, subclass, prog_if) = dev.revision_and_class();
+			let header_type: bus::HeaderType = match dev.header_type() {
+				HeaderType::Endpoint => bus::HeaderType::Standard,
+				HeaderType::CardBusBridge => bus::HeaderType::PciCardbusBridge,
+				HeaderType::PciPciBridge => bus::HeaderType::PciPciBridge,
+				HeaderType::Unknown(i) => bus::HeaderType::Unrecognised(i),
+				_ => panic!("invalid pci device header type"),
+			};
+			let dev_info = DeviceFunctionInfo {
+				vendor_id: dev.vendor_id(),
+				device_id: dev.device_id(),
+				class,
+				subclass,
+				prog_if,
+				revision,
+				header_type,
+			};
+			if let Some(virtio_type) = virtio_device_type(&dev_info) {
+				info!("  VirtIO {:?}", virtio_type);
+				//allocate_bars(&mut pci_root, device_function, &mut allocator);
+				//dump_bar_contents(&mut pci_root, device_function, 4);
+				let mut pci_root = PciRoot::new(PCI_ROOT_ADDR.as_mut_ptr(), Cam::Ecam);
+				let mut transport = PciTransport::new::<VirtioHal>(
+					&mut pci_root,
+					DeviceFunction {
+						bus: dev.bus(),
+						device: dev.device(),
+						function: 0,
+					},
+				)
+				.unwrap();
+				info!(
+					"Detected virtio PCI device with device type {:?}, features {:#018x}",
+					transport.device_type(),
+					transport.read_device_features(),
+				);
+				virtio_device(transport);
+			}
+		}
+	}
+}
+
 pub(crate) fn init_drivers() {
 	// virtio: 4.1.2 PCI Device Discovery
 	without_interrupts(|| {
+		/*
 		for adapter in unsafe {
 			PCI_DEVICES.iter().filter(|x| {
 				let (vendor_id, device_id) = x.id();
@@ -582,7 +756,7 @@ pub(crate) fn init_drivers() {
 			})
 		} {
 			info!(
-				"Found virtio network device with device id {:#x}",
+				"Found virtio  device with device id {:#x}",
 				adapter.device_id()
 			);
 
@@ -602,6 +776,8 @@ pub(crate) fn init_drivers() {
 				_ => {}
 			}
 		}
+		*/
+		init_virtio_drivers();
 
 		// Searching for Realtek RTL8139, which is supported by Qemu
 		#[cfg(feature = "rtl8139")]

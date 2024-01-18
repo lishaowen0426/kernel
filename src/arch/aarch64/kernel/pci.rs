@@ -1,16 +1,19 @@
 // doc: https://www.openfirmware.info/data/docs/bus.pci.pdf
 
+use alloc::string::String;
 use alloc::vec::Vec;
 use core::convert::TryFrom;
 use core::iter::Iterator;
 use core::mem::size_of;
+use core::slice::Chunks;
 use core::{str, u32, u64, u8};
 
 use arm_gic::gicv3::{IntId, Trigger};
 use bit_field::BitField;
 use hermit_dtb::Dtb;
 use pci_types::{
-	Bar, ConfigRegionAccess, InterruptLine, InterruptPin, PciAddress, PciHeader, VendorId, MAX_BARS,
+	Bar, ConfigRegionAccess, EndpointHeader, HeaderType, InterruptLine, InterruptPin, PciAddress,
+	PciHeader, VendorId, MAX_BARS,
 };
 
 use crate::arch::aarch64::kernel::interrupts::GIC;
@@ -21,6 +24,10 @@ use crate::kernel::boot_info;
 
 const PCI_MAX_DEVICE_NUMBER: u8 = 32;
 const PCI_MAX_FUNCTION_NUMBER: u8 = 8;
+
+const DTB_CELL_SIZE: usize = size_of::<u32>();
+
+pub static mut PCI_ROOT_ADDR: VirtAddr = VirtAddr::zero();
 
 #[derive(Debug, Copy, Clone)]
 pub struct PciConfigRegion(VirtAddr);
@@ -51,7 +58,7 @@ impl PciConfigRegionIter {
 }
 
 impl Iterator for PciConfigRegionIter {
-	type Item = PciAddress;
+	type Item = (PciAddress, u8, u8, u8); //bus, dev, function
 
 	fn next(&mut self) -> Option<Self::Item> {
 		if self.end_of_iteration {
@@ -60,6 +67,8 @@ impl Iterator for PciConfigRegionIter {
 
 		//currently only single-function device is supported
 		let probe_addr = PciAddress::new(0, self.bus, self.dev, 0);
+		let bus_copy = self.bus;
+		let dev_copy = self.dev;
 
 		if self.bus == self.bus_end && self.dev == 0b11111 {
 			self.end_of_iteration = true;
@@ -70,7 +79,7 @@ impl Iterator for PciConfigRegionIter {
 			self.dev = 0;
 		}
 
-		return Some(probe_addr);
+		return Some((probe_addr, bus_copy, dev_copy, 0));
 	}
 }
 
@@ -209,11 +218,17 @@ fn detect_pci_regions2(dtb: &Dtb<'_>, parts: &[&str]) -> (u64, u64, u64) {
 	for chunk in pcie_ranges.chunks(chunk_size) {
 		let (child_address, rest) = chunk.split_at(child_address_cells * size_of::<u32>());
 		let (parent_address, region_size) = rest.split_at(parent_address_cells * size_of::<u32>());
+		let region_size = u64::from_be_bytes(region_size.try_into().unwrap());
 
 		let (bitfield, child_address) = child_address.split_at(size_of::<u32>());
 		info!(
-			"child address: 0x{:x}",
+			"PCI address: 0x{:x}",
 			u64::from_be_bytes(child_address.try_into().unwrap())
+		);
+		assert!((bitfield[0] & 0b01000000) == 0);
+		info!(
+			"The region is non-prefetchable with size 0x{:x}",
+			region_size
 		);
 
 		match bitfield[0] & 0b11 {
@@ -358,6 +373,185 @@ fn detect_interrupt(
 	None
 }
 
+#[derive(Copy, Clone, Debug)]
+struct PciInterruptData {
+	dev_num: u8,
+	dev_id: u16,
+	dev_pin: u8,
+	irq_type: u8, // SPI:0, PPI: 1
+	irq_num: u32,
+	trigger: Trigger,
+}
+struct InterruptMapChunks<'a> {
+	map: &'a [u8],
+}
+
+impl<'a> InterruptMapChunks<'a> {
+	fn query_device(&self, dev_num: u8, dev_id: u16) -> Option<PciInterruptData> {
+		for rest in self.map.chunks(10 * DTB_CELL_SIZE) {
+			let (pci_address, rest) = rest.split_at(3 * DTB_CELL_SIZE);
+			let (pin, rest) = rest.split_at(1 * DTB_CELL_SIZE);
+			let (_, rest) = rest.split_at(3 * DTB_CELL_SIZE);
+			let (interrupt_controller_data, rest) = rest.split_at(3 * DTB_CELL_SIZE);
+			assert!(rest.is_empty());
+			assert!(interrupt_controller_data.len() == 3 * DTB_CELL_SIZE);
+
+			let (bitfield, _) = pci_address.split_at(DTB_CELL_SIZE);
+			let bitfield = u32::from_be_bytes(bitfield.try_into().unwrap());
+			if dev_num != ((bitfield & 0x1800) >> 11).try_into().unwrap() {
+				continue;
+			} else {
+				let dev_pin = match u32::from_be_bytes(pin.try_into().unwrap()) & 0x7 {
+					0b01 => 1,
+					0b10 => 2,
+					0b11 => 3,
+					0b100 => 4,
+					_ => return None,
+				};
+
+				let (c1, interrupt_controller_data) =
+					interrupt_controller_data.split_at(DTB_CELL_SIZE);
+				let (c2, interrupt_controller_data) =
+					interrupt_controller_data.split_at(DTB_CELL_SIZE);
+				let (c3, interrupt_controller_data) =
+					interrupt_controller_data.split_at(DTB_CELL_SIZE);
+				let irq_type = u32::from_be_bytes(c1.try_into().unwrap());
+				if irq_type > 1 {
+					return None;
+				}
+				let irq_type = irq_type.try_into().unwrap();
+				let irq_num = u32::from_be_bytes(c2.try_into().unwrap());
+
+				let trigger = match u32::from_be_bytes(c3.try_into().unwrap()) {
+					1u32 => Trigger::Edge,
+					4u32 => Trigger::Level,
+					_ => return None,
+				};
+				return Some(PciInterruptData {
+					dev_num,
+					dev_id,
+					dev_pin,
+					irq_type,
+					irq_num,
+					trigger,
+				});
+			}
+		}
+		None
+	}
+}
+
+// a lot of assumptions are hardcoded...
+// do a safety check before applying them
+fn safety_check_interrupt_map<'a>(dtb: &Dtb<'a>, pcie: &str) -> InterruptMapChunks<'a> {
+	//see https://michael2012z.medium.com/understanding-pci-node-in-fdt-769a894a13cc
+	//for interrupt_controller_data, see https://www.kernel.org/doc/Documentation/devicetree/bindings/interrupt-controller/arm%2Cgic-v3.txt
+	//detect interrupt controller
+	let phandle = dtb.get_property("/", "interrupt-parent").unwrap();
+	let phandle = u32::from_be_bytes(phandle.try_into().unwrap());
+	info!("phandle: 0x{:x}", phandle);
+
+	let mut intc = String::new();
+
+	for node in dtb.enum_subnodes("/") {
+		let parts: Vec<_> = node.split('@').collect();
+
+		if let Some(p) = dtb.get_property(parts.first().unwrap(), "phandle") {
+			if phandle == u32::from_be_bytes(p.try_into().unwrap()) {
+				intc.push_str(parts.first().unwrap());
+				break;
+			}
+		}
+	}
+
+	let intc = intc.as_str();
+
+	let parent_unit_address_len = u32::from_be_bytes(
+		dtb.get_property(intc, "#address-cells")
+			.unwrap()
+			.try_into()
+			.unwrap(),
+	) as usize; // 0
+	assert!(parent_unit_address_len == 2);
+	let parent_specifier_len = u32::from_be_bytes(
+		dtb.get_property(intc, "#interrupt-cells")
+			.unwrap()
+			.try_into()
+			.unwrap(),
+	) as usize; //interrupt controller data
+	assert!(parent_specifier_len == 3);
+	let child_unit_address_len = u32::from_be_bytes(
+		dtb.get_property(pcie, "#address-cells")
+			.unwrap()
+			.try_into()
+			.unwrap(),
+	) as usize; //PCI address
+	assert!(child_unit_address_len == 3);
+	let child_specifier_len = u32::from_be_bytes(
+		dtb.get_property(pcie, "#interrupt-cells")
+			.unwrap()
+			.try_into()
+			.unwrap(),
+	) as usize; //PCI device pin
+	assert!(child_specifier_len == 1);
+
+	info!(
+		"child_unit: {}, child_specifier:{}\nparent_unit: {}, parent_specifier: {}",
+		child_unit_address_len, child_specifier_len, parent_unit_address_len, parent_specifier_len
+	);
+
+	let map_entry_len = DTB_CELL_SIZE
+		* (child_unit_address_len
+			+ child_specifier_len
+			+ 1usize + parent_unit_address_len
+			+ parent_specifier_len);
+
+	let map_mask = dtb.get_property(pcie, "interrupt-map-mask").unwrap();
+	assert!(map_mask.len() == DTB_CELL_SIZE * (child_unit_address_len + child_specifier_len));
+
+	let (high, rest) = map_mask.split_at(DTB_CELL_SIZE);
+	let (mid, rest) = rest.split_at(DTB_CELL_SIZE);
+	let (low, rest) = rest.split_at(DTB_CELL_SIZE);
+	let (end, rest) = rest.split_at(DTB_CELL_SIZE);
+	assert!(rest.is_empty());
+	let (high_mask, mid_mask, low_mask, pin_mask) = (
+		u32::from_be_bytes(high.try_into().unwrap()),
+		u32::from_be_bytes(mid.try_into().unwrap()),
+		u32::from_be_bytes(low.try_into().unwrap()),
+		u32::from_be_bytes(end.try_into().unwrap()),
+	);
+	assert!(high_mask == 0x1800);
+	assert!(mid_mask == 0);
+	assert!(low_mask == 0);
+	assert!(pin_mask == 0x7);
+
+	//construct mapping table
+	if let Some(map) = dtb.get_property(pcie, "interrupt-map") {
+		if map.len() % map_entry_len != 0 {
+			panic!("wrong interrupt map len: {}", map.len());
+		}
+		for rest in map.chunks(map_entry_len) {
+			let (child_unit_address, rest) = rest.split_at(child_unit_address_len * DTB_CELL_SIZE);
+			let (child_interrupt_specifier, rest) =
+				rest.split_at(child_specifier_len * DTB_CELL_SIZE);
+			let (ph, rest) = rest.split_at(DTB_CELL_SIZE);
+			if u32::from_be_bytes(ph.try_into().unwrap()) != phandle {
+				panic!("wrong phandle: {:?}", ph)
+			}
+			let (parent_unit_address, rest) =
+				rest.split_at(parent_unit_address_len * DTB_CELL_SIZE);
+			let (parent_interrupt_specifier, rest) =
+				rest.split_at(parent_specifier_len * DTB_CELL_SIZE);
+			assert!(rest.is_empty());
+
+			let parent_unit = u64::from_be_bytes(parent_unit_address.try_into().unwrap());
+			assert!(parent_unit == 0);
+		}
+		return InterruptMapChunks { map };
+	} else {
+		panic!("pcie does not contain an interrupt-map");
+	};
+}
 pub fn init() {
 	let dtb = unsafe {
 		Dtb::from_raw(core::ptr::from_exposed_addr(
@@ -401,42 +595,63 @@ pub fn init() {
 					flags,
 				);
 
+				unsafe {
+					PCI_ROOT_ADDR = pci_address;
+				}
+
 				let (mut io_start, mem32_start, mut mem64_start) =
 					detect_pci_regions2(&dtb, &parts);
 
-				debug!("IO address space starts at{:#X}", io_start);
-				debug!("Memory32 address space starts at {:#X}", mem32_start);
-				debug!("Memory64 address space starts {:#X}", mem64_start);
 				assert!(io_start > 0);
 				assert!(mem32_start > 0);
 				assert!(mem64_start > 0);
 
+				let map_chunks = safety_check_interrupt_map(&dtb, parts.first().unwrap());
+
 				let pci_config = PciConfigRegion::new(pci_address);
+
+				let mut mem32_allocated: u32 = mem32_start.try_into().unwrap();
+				let align_up =
+					|value: u32, alignment: u32| -> u32 { ((value - 1) | (alignment - 1)) + 1 };
 
 				//scan PCIE
 				let pci_iter = PciConfigRegionIter::new(bus_end.try_into().unwrap());
-				for pa in pci_iter {
+				for (pa, _bus_num, _dev_num, _function_num) in pci_iter {
 					let pd = PciHeader::new(pa);
 					let (vendor_id, device_id) = pd.id(&pci_config);
 					let (header, has_multiple_functions) = (
 						pd.header_type(&pci_config),
 						pd.has_multiple_functions(&pci_config),
 					);
-					if device_id != 0xFFFF {
-						info!("device id: 0x{:x}, vendor id: 0x{:x}, header: {:?}, has_multiple_functions: {}", device_id, vendor_id, header, has_multiple_functions);
-					} else {
+					if device_id == 0xFFFF {
 						continue;
 					}
+
+					if has_multiple_functions {
+						panic!(
+							"multiple function pcie device is not supported, device_id: 0x{:x}",
+							device_id
+						);
+					}
+					if header != HeaderType::Endpoint {
+						panic!("non endpoint header type is not supported");
+					}
+
+					let pd_type0 = EndpointHeader::from_header(pd, &pci_config).unwrap();
+					let (pin, line) = pd_type0.interrupt(&pci_config);
+					info!("bus number: {}, device number: {},device id: 0x{:x}, vendor id: 0x{:x}, header: {:?}, has_multiple_functions: {}, pin: {}, line: {}",pa.bus(),pa.device(), device_id, vendor_id, header, has_multiple_functions, pin, line);
+
 					let dev = PciDevice::new(pa, pci_config);
 					// Initializes BARs
 					let mut cmd = PciCommand::default();
-					for i in 0..MAX_BARS {
-						if let Some(bar) = dev.get_bar(i.try_into().unwrap()) {
-							info!("Bar: {:?}", bar);
+					let mut bar_index = 0usize;
+					while bar_index < MAX_BARS {
+						if let Some(bar) = dev.get_bar(bar_index.try_into().unwrap()) {
 							match bar {
 								Bar::Io { .. } => {
+									info!("io bar:{}", bar_index);
 									dev.set_bar(
-										i.try_into().unwrap(),
+										bar_index.try_into().unwrap(),
 										Bar::Io {
 											port: io_start.try_into().unwrap(),
 										},
@@ -444,20 +659,42 @@ pub fn init() {
 									io_start += 0x20;
 									cmd |=
 										PciCommand::PCI_COMMAND_IO | PciCommand::PCI_COMMAND_MASTER;
+									bar_index += 1;
 								}
-								// Currently, we ignore 32 bit memory bars
-								/*Bar::Memory32 { address, size, prefetchable } => {
-									dev.set_bar(i.try_into().unwrap(), Bar::Memory32 { address: mem32_start.try_into().unwrap(), size,  prefetchable });
-									mem32_start += u64::from(size);
-									cmd |= PciCommand::PCI_COMMAND_MEMORY|PciCommand::PCI_COMMAND_MASTER;
-								}*/
+								Bar::Memory32 {
+									address,
+									size,
+									prefetchable,
+								} => {
+									info!(
+										"mem32 size: 0x{:x}, bar: {}, dev: 0x{:x}",
+										size, bar_index, device_id
+									);
+									mem32_allocated = align_up(mem32_allocated, size);
+									dev.set_bar(
+										bar_index.try_into().unwrap(),
+										Bar::Memory32 {
+											address: mem32_allocated,
+											size,
+											prefetchable,
+										},
+									);
+									mem32_allocated += size;
+									cmd |= PciCommand::PCI_COMMAND_MEMORY
+										| PciCommand::PCI_COMMAND_MASTER;
+									bar_index += 1;
+								}
 								Bar::Memory64 {
 									address: _,
 									size,
 									prefetchable,
 								} => {
+									info!(
+										"mem64 size: 0x{:x}, bar: {}, dev: 0x{:x}",
+										size, bar_index, device_id
+									);
 									dev.set_bar(
-										i.try_into().unwrap(),
+										bar_index.try_into().unwrap(),
 										Bar::Memory64 {
 											address: mem64_start,
 											size,
@@ -467,24 +704,43 @@ pub fn init() {
 									mem64_start += size;
 									cmd |= PciCommand::PCI_COMMAND_MEMORY
 										| PciCommand::PCI_COMMAND_MASTER;
+									bar_index += 2;
 								}
 								_ => {}
 							}
+						} else {
+							bar_index += 1;
 						}
 					}
 					dev.set_command(cmd);
 
-					let (bus, device) = (pa.bus(), pa.device());
+					let (bus, device_number) = (pa.bus(), pa.device());
 
-					if let Some((pin, line)) =
-						detect_interrupt(bus.try_into().unwrap(), device.into(), &dtb, &parts)
-					{
+					if let Some(irq_data) = map_chunks.query_device(device_number, device_id) {
+						info!("irq_data: {:?}", irq_data);
+						debug!(
+							"Initialize interrupt pin {} and interrupt line {} for device 0x{:x}",
+							irq_data.dev_pin, irq_data.irq_num, irq_data.dev_id
+						);
+						dev.set_irq(irq_data.dev_pin, irq_data.irq_num.try_into().unwrap());
+					} else {
+						info!("device id: 0x{:x} does not support interrupt", device_id);
+					}
+
+					/*
+					if let Some((pin, line)) = detect_interrupt(
+						bus.try_into().unwrap(),
+						device_number.into(),
+						&dtb,
+						&parts,
+					) {
 						debug!(
 							"Initialize interrupt pin {} and line {} for device {}",
 							pin, line, device_id
 						);
 						dev.set_irq(pin, line);
 					}
+					*/
 
 					unsafe {
 						PCI_DEVICES.push(dev);

@@ -56,7 +56,7 @@ fs = ["pci"]
 fsgsbase = []
 gem-net = ["tcp"]
 newlib = []
-pci = []
+pci = ["pci-ids"]
 rtl8139 = ["tcp", "pci"]
 smp = []
 tcp = ["smoltcp", "smoltcp/socket-tcp"]
@@ -66,12 +66,14 @@ vga = []
 syscall = []
 
 [dependencies]
+virtio-drivers = {path = "/Users/lsw/Code/hermit/virtio-drivers"}
 ahash = { version = "0.8", default-features = false }
 align-address = "0.1"
 bit_field = "0.10"
 bitflags = "2.4"
 cfg-if = "1"
 crossbeam-utils = { version = "0.8", default-features = false }
+once_cell = { version = "1.19.0", default-features = false }
 dyn-clone = "1.0"
 hashbrown = { version = "0.14", default-features = false }
 hermit-entry = { version = "0.9", features = ["kernel"] }
