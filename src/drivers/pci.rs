@@ -696,6 +696,7 @@ fn virtio_blk(transport: PciTransport) {
 	let blk =
 		VirtIOBlk::<VirtioHal, PciTransport>::new(transport).expect("failed to create blk driver");
 	assert!(!blk.readonly());
+	info!("blk cap: {}", blk.capacity());
 	assert!(blk.capacity() == 262144); //hardcode this number in the implementation of littlefs2 Storage
 
 	register_driver(PciDriver::VirtioBlk(InterruptTicketMutex::new(

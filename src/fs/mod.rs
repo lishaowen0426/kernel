@@ -2,6 +2,8 @@ use crate::drivers::pci;
 #[cfg(feature = "pci")]
 pub mod fuse;
 
+pub mod fatfs;
+
 pub fn init() {
 	#[cfg(feature = "pci")]
 	fuse::init();

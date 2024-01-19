@@ -45,7 +45,7 @@ name = "measure_startup_time"
 harness = false
 
 [features]
-default = ["pci", "pci-ids", "acpi", "fsgsbase", "smp", "tcp", "dhcpv4", "fs"]
+default = ["pci", "pci-ids", "acpi", "fsgsbase", "smp", "tcp", "dhcpv4", "fs", "lfn"]
 acpi = []
 dhcpv4 = [
     "smoltcp",
@@ -64,6 +64,23 @@ udp = ["smoltcp", "smoltcp/socket-udp"]
 trace = []
 vga = []
 syscall = []
+#fatfs
+# LFN (Long File Name) support
+lfn = []
+# Use dynamic allocation. When used without std please enable core_io/collections
+alloc = []
+# Full Unicode support. Disabling it reduces code size by avoiding Unicode-aware character case conversion
+unicode = []
+# Enable only error-level logging
+log_level_error = []
+# Enable logging levels warn and up
+log_level_warn  = ["log_level_error"]
+# Enable logging levels info and up
+log_level_info  = ["log_level_warn"]
+# Enable logging levels debug and up
+log_level_debug = ["log_level_info"]
+# Enable all logging levels: trace and up
+log_level_trace = ["log_level_debug"]
 
 [dependencies]
 virtio-drivers = {path = "/Users/lsw/Code/hermit/virtio-drivers"}
@@ -96,6 +113,7 @@ time = { version = "0.3", default-features = false }
 zerocopy = { version = "0.7", features = ["derive"] }
 wasmi = {version = "0.31.1", default-features = false}
 generic-array = {version = "1.0.0", default-features = false}
+chrono = { version = "0.4", default-features = false, features = ["clock"], optional = true }
 
 [dependencies.smoltcp]
 version = "0.10"
@@ -140,6 +158,8 @@ trapframe = "0.9"
 float-cmp = "0.9"
 num-traits = { version = "0.2", default-features = false }
 x86 = { version = "0.52", default-features = false }
+env_logger = "0.9"
+fscommon = "0.1"
 
 [build-dependencies]
 anyhow = "1"
