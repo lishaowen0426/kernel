@@ -43,6 +43,7 @@ use crate::drivers::virtio::transport::pci as pci_virtio;
 	feature = "fs"
 ))]
 use crate::drivers::virtio::transport::pci::VirtioDriver;
+use crate::drivers::VirtioBlkDriver;
 
 #[derive(Default, Debug, Copy, Clone)]
 pub struct PciBitfield {
@@ -543,6 +544,8 @@ pub(crate) enum PciDriver {
 	VirtioNet(InterruptTicketMutex<VirtioNetDriver>),
 	#[cfg(all(feature = "rtl8139", any(feature = "tcp", feature = "udp")))]
 	RTL8139Net(InterruptTicketMutex<RTL8139Driver>),
+
+	VirtioBlk(InterruptTicketMutex<VirtioBlkDriver>),
 }
 
 impl PciDriver {
@@ -568,6 +571,14 @@ impl PciDriver {
 	fn get_filesystem_driver(&self) -> Option<&InterruptTicketMutex<VirtioFsDriver>> {
 		match self {
 			Self::VirtioFs(drv) => Some(drv),
+			#[allow(unreachable_patterns)]
+			_ => None,
+		}
+	}
+
+	fn get_blk_driver(&self) -> Option<&InterruptTicketMutex<VirtioBlkDriver>> {
+		match self {
+			Self::VirtioBlk(drv) => Some(drv),
 			#[allow(unreachable_patterns)]
 			_ => None,
 		}
@@ -599,7 +610,10 @@ pub(crate) fn get_filesystem_driver() -> Option<&'static InterruptTicketMutex<Vi
 	}
 }
 
-struct VirtioHal;
+pub(crate) fn get_blk_driver() -> Option<&'static InterruptTicketMutex<VirtioBlkDriver>> {
+	unsafe { PCI_DRIVERS.iter().find_map(|drv| drv.get_blk_driver()) }
+}
+pub struct VirtioHal;
 unsafe impl virtio_drivers::Hal for VirtioHal {
 	fn dma_alloc(
 		pages: usize,
@@ -678,23 +692,19 @@ fn virtio_net<T: Transport>(transport: T) {
 	info!("virtio-net test finished");
 }
 
-fn virtio_blk<T: Transport>(transport: T) {
-	let mut blk = VirtIOBlk::<VirtioHal, T>::new(transport).expect("failed to create blk driver");
+fn virtio_blk(transport: PciTransport) {
+	let blk =
+		VirtIOBlk::<VirtioHal, PciTransport>::new(transport).expect("failed to create blk driver");
 	assert!(!blk.readonly());
-	let mut input = [0xffu8; 512];
-	let mut output = [0; 512];
-	for i in 0..32 {
-		for x in input.iter_mut() {
-			*x = i as u8;
-		}
-		blk.write_blocks(i, &input).expect("failed to write");
-		blk.read_blocks(i, &mut output).expect("failed to read");
-		assert_eq!(input, output);
-	}
-	info!("virtio-blk test finished");
+	assert!(blk.capacity() == 262144); //hardcode this number in the implementation of littlefs2 Storage
+
+	register_driver(PciDriver::VirtioBlk(InterruptTicketMutex::new(
+		VirtioBlkDriver::new(blk),
+	)));
+	info!("virtio-blk registered");
 }
 
-fn virtio_device(transport: impl Transport) {
+fn virtio_device(transport: PciTransport) {
 	match transport.device_type() {
 		DeviceType::Block => virtio_blk(transport),
 		t => warn!("Unrecognized virtio device: {:?}", t),

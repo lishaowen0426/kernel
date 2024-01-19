@@ -95,6 +95,7 @@ talc = { version = "3" }
 time = { version = "0.3", default-features = false }
 zerocopy = { version = "0.7", features = ["derive"] }
 wasmi = {version = "0.31.1", default-features = false}
+generic-array = {version = "1.0.0", default-features = false}
 
 [dependencies.smoltcp]
 version = "0.10"
@@ -151,3 +152,4 @@ members = [
 exclude = [
 	"hermit-builtins",
 ]
+

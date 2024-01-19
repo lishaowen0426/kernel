@@ -14,6 +14,9 @@ pub mod pci;
 ))]
 pub mod virtio;
 
+mod virtio_driver;
+
+pub use virtio_driver::*;
 /// A common error module for drivers.
 /// [DriverError](enums.drivererror.html) values will be
 /// passed on to higher layers.
