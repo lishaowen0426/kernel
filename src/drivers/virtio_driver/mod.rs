@@ -1,3 +1,3 @@
 mod blk;
 
-pub use blk::VirtioBlkDriver;
+pub use blk::{VirtioBlk, VirtioBlkDriver};

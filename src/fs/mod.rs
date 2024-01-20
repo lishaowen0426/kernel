@@ -1,4 +1,4 @@
-use crate::drivers::pci;
+use crate::drivers::{pci, VirtioBlk};
 #[cfg(feature = "pci")]
 pub mod fuse;
 
@@ -10,3 +10,5 @@ pub fn init() {
 
 	let mut drv = pci::get_blk_driver().unwrap().lock();
 }
+
+pub fn register_filesystem(blk: VirtioBlk) {}

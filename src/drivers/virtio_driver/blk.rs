@@ -8,7 +8,7 @@ use crate::fs::fatfs::{self, IoBase, IoError};
 
 const BLOCK_SIZE: usize = 512;
 
-type VirtioBlk = VirtIOBlk<VirtioHal, PciTransport>;
+pub type VirtioBlk = VirtIOBlk<VirtioHal, PciTransport>;
 pub struct VirtioBlkDriver {
 	blk: VirtioBlk,
 	seek: usize,
