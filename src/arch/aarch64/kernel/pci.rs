@@ -2,10 +2,8 @@
 
 use alloc::string::String;
 use alloc::vec::Vec;
-use core::convert::TryFrom;
 use core::iter::Iterator;
 use core::mem::size_of;
-use core::slice::Chunks;
 use core::{str, u32, u64, u8};
 
 use arm_gic::gicv3::{IntId, Trigger};
@@ -13,13 +11,13 @@ use bit_field::BitField;
 use hermit_dtb::Dtb;
 use pci_types::{
 	Bar, ConfigRegionAccess, EndpointHeader, HeaderType, InterruptLine, InterruptPin, PciAddress,
-	PciHeader, VendorId, MAX_BARS,
+	PciHeader, MAX_BARS,
 };
 
 use crate::arch::aarch64::kernel::interrupts::GIC;
 use crate::arch::aarch64::mm::paging::{self, BasePageSize, PageSize, PageTableEntryFlags};
 use crate::arch::aarch64::mm::{virtualmem, PhysAddr, VirtAddr};
-use crate::drivers::pci::{PciBitfield, PciCommand, PciDevice, PCI_DEVICES};
+use crate::drivers::pci::{PciCommand, PciDevice, PCI_DEVICES};
 use crate::kernel::boot_info;
 
 const PCI_MAX_DEVICE_NUMBER: u8 = 32;
@@ -126,7 +124,7 @@ impl ConfigRegionAccess for PciConfigRegion {
 }
 
 /// Try to find regions for the device registers
-#[allow(unused_assignments)]
+#[allow(unused_assignments, dead_code)]
 fn detect_pci_regions(dtb: &Dtb<'_>, parts: &[&str]) -> (u64, u64, u64) {
 	let mut io_start: u64 = 0;
 	let mut mem32_start: u64 = 0;
@@ -268,7 +266,7 @@ fn detect_pci_regions2(dtb: &Dtb<'_>, parts: &[&str]) -> (u64, u64, u64) {
 	}
 	(io_start, mem32_start, mem64_start)
 }
-#[allow(unused_assignments)]
+#[allow(unused_assignments, dead_code)]
 fn detect_interrupt(
 	bus: u32,
 	dev: u32,

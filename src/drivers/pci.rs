@@ -7,7 +7,6 @@ use core::convert::TryFrom;
 use core::fmt;
 use core::ptr::NonNull;
 
-use aarch64::regs::MIDR_EL1::Revision;
 use bitflags::bitflags;
 use hermit_sync::without_interrupts;
 #[cfg(any(feature = "tcp", feature = "udp", feature = "fs"))]
@@ -37,13 +36,9 @@ use crate::drivers::net::virtio_net::VirtioNetDriver;
 	all(any(feature = "tcp", feature = "udp"), not(feature = "rtl8139")),
 	feature = "fs"
 ))]
-use crate::drivers::virtio::transport::pci as pci_virtio;
-#[cfg(any(
-	all(any(feature = "tcp", feature = "udp"), not(feature = "rtl8139")),
-	feature = "fs"
-))]
 use crate::drivers::virtio::transport::pci::VirtioDriver;
 use crate::drivers::VirtioBlkDriver;
+use crate::fs;
 
 #[derive(Default, Debug, Copy, Clone)]
 pub struct PciBitfield {
@@ -478,7 +473,7 @@ impl<T: ConfigRegionAccess> fmt::Display for PciDevice<T> {
 
 			// If the devices uses an IRQ, output this one as well.
 			let (pin, irq) = endpoint.interrupt(&self.access);
-			write!(f, "irq pin: {}, irq line:{}", pin, irq);
+			write!(f, "irq pin: {}, irq line:{}", pin, irq)?;
 			if irq != 0 && irq != u8::MAX {
 				write!(f, ", IRQ {irq}")?;
 			}
@@ -696,13 +691,10 @@ fn virtio_blk(transport: PciTransport) {
 	let blk =
 		VirtIOBlk::<VirtioHal, PciTransport>::new(transport).expect("failed to create blk driver");
 	assert!(!blk.readonly());
-	info!("blk cap: {}", blk.capacity());
 	assert!(blk.capacity() == 262144); //hardcode this number in the implementation of littlefs2 Storage
 
-	register_driver(PciDriver::VirtioBlk(InterruptTicketMutex::new(
-		VirtioBlkDriver::new(blk),
-	)));
-	info!("virtio-blk registered");
+	fs::register_filesystem(VirtioBlkDriver::new(blk));
+	info!("virtio-blk filesystem registered");
 }
 
 fn virtio_device(transport: PciTransport) {

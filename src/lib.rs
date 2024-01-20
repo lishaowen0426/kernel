@@ -363,6 +363,26 @@ fn boot_processor_main() -> ! {
 	fs::init();
 
 	engine::init();
+	unsafe {
+		use littlefs2::io::SeekFrom;
+		use littlefs2::path::PathBuf;
+
+		use crate::fs::FS;
+		let fs = FS.assume_init_ref();
+		let mut buf = [0u8; 11];
+		fs.open_file_with_options_and_then(
+			|options| options.read(true).write(true).create(false),
+			&PathBuf::from(b"example.txt"),
+			|file| {
+				file.write(b"Why is black smoke coming out?!")?;
+				file.seek(SeekFrom::End(-24)).unwrap();
+				assert_eq!(file.read(&mut buf)?, 11);
+				Ok(())
+			},
+		)
+		.unwrap();
+		assert_eq!(&buf, b"black smoke");
+	}
 
 	// Start the initd task.
 	//scheduler::PerCoreScheduler::spawn(initd, 0, scheduler::task::NORMAL_PRIO, 0, USER_STACK_SIZE);

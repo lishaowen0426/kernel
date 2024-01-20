@@ -1,7 +1,5 @@
-use alloc::borrow::ToOwned;
 use core::cell::{RefCell, RefMut};
 use core::mem::MaybeUninit;
-use core::option::Option;
 use core::result::Result;
 
 use hermit_sync::{Lazy, SpinMutex};

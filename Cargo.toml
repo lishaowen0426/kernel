@@ -83,7 +83,7 @@ log_level_debug = ["log_level_info"]
 log_level_trace = ["log_level_debug"]
 
 [dependencies]
-virtio-drivers = {path = "/Users/lsw/Code/hermit/virtio-drivers"}
+virtio-drivers = {path = "/home/sw/hermit/virtio-drivers"}
 ahash = { version = "0.8", default-features = false }
 align-address = "0.1"
 bit_field = "0.10"
@@ -114,6 +114,7 @@ zerocopy = { version = "0.7", features = ["derive"] }
 wasmi = {version = "0.31.1", default-features = false}
 generic-array = {version = "1.0.0", default-features = false}
 chrono = { version = "0.4", default-features = false, features = ["clock"], optional = true }
+littlefs2 = {path="/home/sw/hermit/littlefs2"}
 
 [dependencies.smoltcp]
 version = "0.10"

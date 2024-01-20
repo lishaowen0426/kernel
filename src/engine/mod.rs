@@ -1,9 +1,11 @@
 use alloc::string::String;
 use core::convert::Into;
 use core::fmt::{Debug, Display};
+/*
 const WASM_FILE: &'static [u8; 2517579] = include_bytes!(
 	"/Users/lsw/Code/hermit/wasi_hello_world/target/wasm32-wasi/debug/wasi_hello_world.wasm"
 );
+*/
 
 mod host_api;
 mod manager;
@@ -42,6 +44,7 @@ pub fn init() {
 }
 
 pub extern "C" fn workloop(_arg: usize) -> i32 {
+	/*
 	let mut locked = WASM.lock();
 	let handle = match locked.load(WASM_FILE.as_slice()) {
 		Ok(h) => h,
@@ -55,6 +58,7 @@ pub extern "C" fn workloop(_arg: usize) -> i32 {
 			return e.into();
 		}
 	}
+	*/
 
 	0
 }

@@ -1,6 +1,8 @@
 use alloc::vec::Vec;
 
-use virtio_drivers::device::blk::{BlkReq, VirtIOBlk};
+use generic_array::typenum::{U512, U8};
+use littlefs2::driver::Storage;
+use virtio_drivers::device::blk::VirtIOBlk;
 use virtio_drivers::transport::pci::PciTransport;
 
 use crate::drivers::pci::VirtioHal;
@@ -160,5 +162,55 @@ impl fatfs::Seek for VirtioBlkDriver {
 			self.eof = self.seek
 		}
 		Ok(self.seek as u64)
+	}
+}
+
+static ERASE_BUFFER: [u8; BLOCK_SIZE] = [0xffu8; BLOCK_SIZE];
+impl Storage for VirtioBlkDriver {
+	const READ_SIZE: usize = BLOCK_SIZE;
+
+	const WRITE_SIZE: usize = BLOCK_SIZE;
+
+	const BLOCK_SIZE: usize = BLOCK_SIZE;
+
+	const BLOCK_COUNT: usize = 262144;
+
+	type CACHE_SIZE = U512;
+
+	type LOOKAHEAD_SIZE = U8;
+
+	fn read(&mut self, off: usize, buf: &mut [u8]) -> littlefs2::io::Result<usize> {
+		assert!(off % Self::READ_SIZE == 0);
+		assert!(buf.len() % Self::READ_SIZE == 0);
+
+		let start_blk = off / Self::READ_SIZE;
+		for (blk, c) in buf.chunks_mut(Self::READ_SIZE).enumerate() {
+			self.blk.read_blocks(start_blk + blk, c).unwrap();
+		}
+		Ok(buf.len())
+	}
+
+	fn write(&mut self, off: usize, data: &[u8]) -> littlefs2::io::Result<usize> {
+		assert!(off % Self::WRITE_SIZE == 0);
+		assert!(data.len() % Self::WRITE_SIZE == 0);
+
+		let start_blk = off / Self::READ_SIZE;
+		for (blk, c) in data.chunks(Self::WRITE_SIZE).enumerate() {
+			self.blk.write_blocks(start_blk + blk, c).unwrap();
+		}
+		Ok(data.len())
+	}
+
+	fn erase(&mut self, off: usize, len: usize) -> littlefs2::io::Result<usize> {
+		assert!(off % Self::BLOCK_SIZE == 0);
+		assert!(len % Self::BLOCK_SIZE == 0);
+
+		let start_blk = off / Self::BLOCK_SIZE;
+		for i in 0..(len / Self::BLOCK_SIZE) {
+			self.blk
+				.write_blocks(start_blk + i, ERASE_BUFFER.as_slice())
+				.unwrap();
+		}
+		Ok(len)
 	}
 }

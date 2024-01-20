@@ -15,7 +15,6 @@ cfg_if::cfg_if! {
 		pub use self::aarch64::kernel::processor;
 		pub use self::aarch64::kernel::processor::set_oneshot_timer;
 		pub use self::aarch64::kernel::scheduler;
-		pub use self::aarch64::kernel::switch;
 		pub use self::aarch64::kernel::systemtime::get_boot_time;
 		#[cfg(feature = "smp")]
 		pub use self::aarch64::kernel::application_processor_init;

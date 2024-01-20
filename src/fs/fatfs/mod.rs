@@ -54,8 +54,6 @@
     clippy::uninlined_format_args, // not supported before Rust 1.58.0
 )]
 
-extern crate log;
-
 #[cfg(all(not(feature = "std"), feature = "alloc"))]
 extern crate alloc;
 
