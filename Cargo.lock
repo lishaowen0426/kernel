@@ -603,7 +603,7 @@ dependencies = [
  "atomic-polyfill",
  "hash32",
  "rustc_version",
- "spin",
+ "spin 0.9.8",
  "stable_deref_trait",
 ]
 
@@ -652,6 +652,7 @@ dependencies = [
  "cfg-if",
  "chrono",
  "crossbeam-utils",
+ "cstr_core",
  "dyn-clone",
  "env_logger",
  "fdt",
@@ -662,6 +663,7 @@ dependencies = [
  "hermit-dtb",
  "hermit-entry",
  "hermit-sync",
+ "lazy_static",
  "littlefs2",
  "llvm-tools",
  "lock_api",
@@ -774,6 +776,9 @@ name = "lazy_static"
 version = "1.4.0"
 source = "registry+https://github.com/rust-lang/crates.io-index"
 checksum = "e2abad23fbc42b3700f2f279844dc832adb2b2eb069b2df918f455c4e18cc646"
+dependencies = [
+ "spin 0.5.2",
+]
 
 [[package]]
 name = "lazycell"
@@ -1266,7 +1271,7 @@ dependencies = [
  "cc",
  "getrandom",
  "libc",
- "spin",
+ "spin 0.9.8",
  "untrusted",
  "windows-sys 0.48.0",
 ]
@@ -1430,6 +1435,12 @@ dependencies = [
  "heapless",
  "managed",
 ]
+
+[[package]]
+name = "spin"
+version = "0.5.2"
+source = "registry+https://github.com/rust-lang/crates.io-index"
+checksum = "6e63cff320ae2c57904679ba7cb63280a3dc4613885beafb148ee7bf9aa9042d"
 
 [[package]]
 name = "spin"
@@ -1763,7 +1774,7 @@ source = "registry+https://github.com/rust-lang/crates.io-index"
 checksum = "acfc1e384a36ca532d070a315925887247f3c7e23567e23e0ac9b1c5d6b8bf76"
 dependencies = [
  "smallvec",
- "spin",
+ "spin 0.9.8",
  "wasmi_arena",
  "wasmi_core",
  "wasmparser-nostd",

@@ -363,6 +363,7 @@ fn boot_processor_main() -> ! {
 	fs::init();
 
 	engine::init();
+	/*
 	unsafe {
 		use littlefs2::io::SeekFrom;
 		use littlefs2::path::PathBuf;
@@ -383,9 +384,11 @@ fn boot_processor_main() -> ! {
 		.unwrap();
 		assert_eq!(&buf, b"black smoke");
 	}
+	*/
 
 	// Start the initd task.
-	//scheduler::PerCoreScheduler::spawn(initd, 0, scheduler::task::NORMAL_PRIO, 0, USER_STACK_SIZE);
+	scheduler::PerCoreScheduler::spawn(initd, 0, scheduler::task::NORMAL_PRIO, 0, USER_STACK_SIZE);
+	/*
 	scheduler::PerCoreScheduler::spawn(
 		engine::workloop,
 		0,
@@ -393,6 +396,7 @@ fn boot_processor_main() -> ! {
 		0,
 		USER_STACK_SIZE,
 	);
+	*/
 
 	// Run the scheduler loop.
 	PerCoreScheduler::run();

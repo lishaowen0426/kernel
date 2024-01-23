@@ -17,6 +17,7 @@ pub use self::tasks::*;
 pub use self::timer::*;
 use crate::env;
 use crate::fd::{dup_object, get_object, remove_object, DirectoryEntry, FileDescriptor};
+use crate::fs::LITTLEFS;
 use crate::syscalls::fs::FileAttr;
 use crate::syscalls::interfaces::SyscallInterface;
 #[cfg(target_os = "none")]
@@ -190,7 +191,11 @@ extern "C" fn __sys_open(name: *const u8, flags: i32, mode: i32) -> FileDescript
 
 #[no_mangle]
 pub extern "C" fn sys_open(name: *const u8, flags: i32, mode: i32) -> FileDescriptor {
-	kernel_function!(__sys_open(name, flags, mode))
+	//kernel_function!(__sys_open(name, flags, mode))
+	match LITTLEFS.open(name, flags, mode) {
+		Ok(fd) => fd,
+		Err(e) => e,
+	}
 }
 
 extern "C" fn __sys_close(fd: FileDescriptor) -> i32 {
@@ -200,7 +205,8 @@ extern "C" fn __sys_close(fd: FileDescriptor) -> i32 {
 
 #[no_mangle]
 pub extern "C" fn sys_close(fd: FileDescriptor) -> i32 {
-	kernel_function!(__sys_close(fd))
+	//kernel_function!(__sys_close(fd))
+	LITTLEFS.close(fd)
 }
 
 extern "C" fn __sys_read(fd: FileDescriptor, buf: *mut u8, len: usize) -> isize {
@@ -210,7 +216,11 @@ extern "C" fn __sys_read(fd: FileDescriptor, buf: *mut u8, len: usize) -> isize 
 
 #[no_mangle]
 pub extern "C" fn sys_read(fd: FileDescriptor, buf: *mut u8, len: usize) -> isize {
-	kernel_function!(__sys_read(fd, buf, len))
+	if fd == 0 || fd == 1 || fd == 2 {
+		kernel_function!(__sys_read(fd, buf, len))
+	} else {
+		LITTLEFS.read(fd, buf, len)
+	}
 }
 
 extern "C" fn __sys_write(fd: FileDescriptor, buf: *const u8, len: usize) -> isize {
@@ -220,7 +230,11 @@ extern "C" fn __sys_write(fd: FileDescriptor, buf: *const u8, len: usize) -> isi
 
 #[no_mangle]
 pub extern "C" fn sys_write(fd: FileDescriptor, buf: *const u8, len: usize) -> isize {
-	kernel_function!(__sys_write(fd, buf, len))
+	if fd == 0 || fd == 1 || fd == 2 {
+		kernel_function!(__sys_write(fd, buf, len))
+	} else {
+		LITTLEFS.write(fd, buf, len)
+	}
 }
 
 extern "C" fn __sys_ioctl(fd: FileDescriptor, cmd: i32, argp: *mut core::ffi::c_void) -> i32 {
@@ -243,7 +257,11 @@ extern "C" fn __sys_lseek(fd: FileDescriptor, offset: isize, whence: i32) -> isi
 
 #[no_mangle]
 pub extern "C" fn sys_lseek(fd: FileDescriptor, offset: isize, whence: i32) -> isize {
-	kernel_function!(__sys_lseek(fd, offset, whence))
+	if fd == 0 || fd == 1 || fd == 2 {
+		kernel_function!(__sys_lseek(fd, offset, whence))
+	} else {
+		LITTLEFS.lseek(fd, offset, whence)
+	}
 }
 
 extern "C" fn __sys_readdir(fd: FileDescriptor) -> DirectoryEntry {
