@@ -17,7 +17,7 @@ pub use self::tasks::*;
 pub use self::timer::*;
 use crate::env;
 use crate::fd::{dup_object, get_object, remove_object, DirectoryEntry, FileDescriptor};
-use crate::fs::LITTLEFS;
+use crate::fs::{DirDescriptor, LITTLEFS};
 use crate::syscalls::fs::FileAttr;
 use crate::syscalls::interfaces::SyscallInterface;
 #[cfg(target_os = "none")]
@@ -130,7 +130,8 @@ extern "C" fn __sys_mkdir(_name: *const u8, _mode: u32) -> i32 {
 
 #[no_mangle]
 pub extern "C" fn sys_mkdir(name: *const u8, mode: u32) -> i32 {
-	kernel_function!(__sys_mkdir(name, mode))
+	//kernel_function!(__sys_mkdir(name, mode))
+	LITTLEFS.mkdir(name, mode)
 }
 
 #[cfg(target_arch = "x86_64")]
@@ -145,7 +146,8 @@ extern "C" fn __sys_rmdir(_name: *const u8) -> i32 {
 
 #[no_mangle]
 pub extern "C" fn sys_rmdir(name: *const u8) -> i32 {
-	kernel_function!(__sys_rmdir(name))
+	//kernel_function!(__sys_rmdir(name))
+	LITTLEFS.rmdir(name)
 }
 
 extern "C" fn __sys_stat(name: *const u8, stat: *mut FileAttr) -> i32 {
@@ -181,8 +183,12 @@ extern "C" fn __sys_opendir(name: *const u8) -> FileDescriptor {
 }
 
 #[no_mangle]
-pub extern "C" fn sys_opendir(name: *const u8) -> FileDescriptor {
-	kernel_function!(__sys_opendir(name))
+pub extern "C" fn sys_opendir(name: *const u8) -> DirDescriptor {
+	//kernel_function!(__sys_opendir(name))
+	match LITTLEFS.read_dir(name) {
+		Ok(d) => d,
+		Err(e) => e,
+	}
 }
 
 extern "C" fn __sys_open(name: *const u8, flags: i32, mode: i32) -> FileDescriptor {
@@ -205,8 +211,11 @@ extern "C" fn __sys_close(fd: FileDescriptor) -> i32 {
 
 #[no_mangle]
 pub extern "C" fn sys_close(fd: FileDescriptor) -> i32 {
-	//kernel_function!(__sys_close(fd))
-	LITTLEFS.close(fd)
+	if fd == 0 || fd == 1 || fd == 2 {
+		kernel_function!(__sys_close(fd))
+	} else {
+		LITTLEFS.close(fd)
+	}
 }
 
 extern "C" fn __sys_read(fd: FileDescriptor, buf: *mut u8, len: usize) -> isize {
@@ -292,4 +301,9 @@ extern "C" fn __sys_image_start_addr() -> usize {
 #[no_mangle]
 pub extern "C" fn sys_image_start_addr() -> usize {
 	kernel_function!(__sys_image_start_addr())
+}
+
+#[no_mangle]
+pub extern "C" fn sys_next_dir_entry(dd: i32, path: *mut u8, attr: *mut FileAttr) -> i32 {
+	LITTLEFS.next_dir_entry(dd, path, attr)
 }

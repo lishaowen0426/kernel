@@ -44,6 +44,11 @@ fn rtc_read(off: usize) -> u32 {
 	value
 }
 
+#[inline]
+pub fn read_rtc() -> u64 {
+	rtc_read(RTC_DR) as u64
+}
+
 pub fn get_boot_time() -> u64 {
 	*BOOT_TIME.get().unwrap()
 }

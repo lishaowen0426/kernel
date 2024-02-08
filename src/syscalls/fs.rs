@@ -6,6 +6,8 @@ use core::ops::Deref;
 
 use hermit_sync::TicketMutex;
 
+use self::littlefs2_mode::LF_DIR;
+use crate::aarch64::kernel::systemtime::read_rtc;
 /// Design:
 /// - want to support different backends. One of them virtiofs.
 /// - want to support multiple mounted filesystems at once.
@@ -311,6 +313,132 @@ pub struct FileAttr {
 	pub st_ctime_nsec: i64,
 	pub st_birthtime: i64,
 	pub st_birthtime_nsec: i64,
+}
+pub mod littlefs2_mode {
+	pub const LF_DIR: u32 = 0b1 << 0;
+	pub const LF_FILE: u32 = 0b1 << 1;
+	pub const LF_SYMLINK: u32 = 0b1 << 2;
+	pub const LF_BLK: u32 = 0b1 << 3;
+	pub const LF_CHAR: u32 = 0b1 << 4;
+	pub const LF_FIFO: u32 = 0b1 << 5;
+	pub const LF_SOCKET_DGRAM: u32 = 0b1 << 6;
+	pub const LF_SOCKET_STREAM: u32 = 0b1 << 7;
+	pub const LF_RDONLY: u32 = 0b1 << 8;
+}
+
+use littlefs2_mode::*;
+
+impl FileAttr {
+	pub fn new_file(rdonly: bool) -> Self {
+		let mut fa = Self::default();
+		let t = read_rtc() as i64;
+		fa.set_file().set_ctime(t).set_atime(t).set_mtime(t);
+		if rdonly {
+			fa.set_readonly();
+		}
+		fa
+	}
+	pub fn new_dir() -> Self {
+		let mut fa = Self::default();
+		let t = read_rtc() as i64;
+		fa.set_dir().set_ctime(t).set_atime(t).set_mtime(t);
+		fa
+	}
+
+	pub fn set_size(&mut self, sz: usize) -> &mut Self {
+		self.st_size = sz as i64;
+		self
+	}
+
+	pub fn get_size(&self) -> usize {
+		self.st_size as usize
+	}
+
+	pub fn set_atime(&mut self, atime: i64) -> &mut Self {
+		self.st_atime = atime;
+		self
+	}
+	pub fn get_atime(&self) -> i64 {
+		self.st_atime
+	}
+	pub fn set_mtime(&mut self, mtime: i64) -> &mut Self {
+		self.st_mtime = mtime;
+		self
+	}
+	pub fn get_mtime(&self) -> i64 {
+		self.st_mtime
+	}
+	pub fn set_ctime(&mut self, ctime: i64) -> &mut Self {
+		self.st_ctime = ctime;
+		self
+	}
+	pub fn get_ctime(&self) -> i64 {
+		self.st_ctime
+	}
+
+	pub fn set_dir(&mut self) -> &mut Self {
+		self.st_mode |= LF_DIR;
+		self
+	}
+	pub fn is_dir(&self) -> bool {
+		self.st_mode & LF_DIR != 0
+	}
+	pub fn set_file(&mut self) -> &mut Self {
+		self.st_mode |= LF_FILE;
+		self
+	}
+	pub fn is_file(&self) -> bool {
+		self.st_mode & LF_FILE != 0
+	}
+	pub fn set_symlink(&mut self) -> &mut Self {
+		self.st_mode |= LF_SYMLINK;
+		self
+	}
+	pub fn is_symlink(&self) -> bool {
+		self.st_mode & LF_SYMLINK != 0
+	}
+	pub fn set_blk(&mut self) -> &mut Self {
+		self.st_mode |= LF_BLK;
+		self
+	}
+	pub fn is_blk(&self) -> bool {
+		self.st_mode & LF_BLK != 0
+	}
+	pub fn set_char(&mut self) -> &mut Self {
+		self.st_mode |= LF_CHAR;
+		self
+	}
+	pub fn is_char(&self) -> bool {
+		self.st_mode & LF_CHAR != 0
+	}
+	pub fn set_fifo(&mut self) -> &mut Self {
+		self.st_mode |= LF_FIFO;
+		self
+	}
+	pub fn is_fifo(&self) -> bool {
+		self.st_mode & LF_FIFO != 0
+	}
+	pub fn set_socket_dgram(&mut self) -> &mut Self {
+		self.st_mode |= LF_SOCKET_DGRAM;
+		self
+	}
+	pub fn is_socket_dgram(&self) -> bool {
+		self.st_mode & LF_SOCKET_DGRAM != 0
+	}
+	pub fn set_socket_stream(&mut self) -> &mut Self {
+		self.st_mode |= LF_SOCKET_STREAM;
+		self
+	}
+	pub fn is_socket_stream(&self) -> bool {
+		self.st_mode & LF_SOCKET_STREAM != 0
+	}
+	pub fn set_readonly(&mut self) -> &mut Self {
+		self.st_mode |= LF_RDONLY;
+		self
+	}
+	pub fn is_readonly(&self) -> bool {
+		self.st_mode & LF_RDONLY != 0
+	}
 }
 
 #[derive(Debug, FromPrimitive, ToPrimitive)]

@@ -1,14 +1,20 @@
 use core::cell::{RefCell, RefMut};
-use core::mem::{size_of, MaybeUninit};
+use core::iter::Iterator;
+use core::mem::{self, size_of, MaybeUninit};
+use core::ops::Deref;
 use core::sync::atomic::{compiler_fence, Ordering};
 
 use cstr_core::CStr;
-use littlefs2::fs::{Allocation, File, FileAllocation, Filesystem, OpenOptions};
+use littlefs2::fs::{
+	Allocation, Attribute, DirEntry, File, FileAllocation, Filesystem, OpenOptions, ReadDir,
+	ReadDirAllocation,
+};
 use littlefs2::io::SeekFrom;
 use littlefs2::path::Path;
 
 use crate::drivers::{pci, VirtioBlkDriver};
 use crate::fd::FileDescriptor;
+use crate::syscalls::fs::{littlefs2_mode, FileAttr};
 #[cfg(feature = "pci")]
 pub mod fuse;
 
@@ -21,6 +27,7 @@ pub static mut BLK: MaybeUninit<VirtioBlkDriver> = MaybeUninit::uninit();
 pub static mut FS: MaybeUninit<Filesystem<'static, VirtioBlkDriver>> = MaybeUninit::uninit();
 
 pub static mut FILES: MaybeUninit<FileInfo> = MaybeUninit::uninit();
+pub static mut DIRS: MaybeUninit<DirInfo> = MaybeUninit::uninit();
 
 pub fn init() {
 	#[cfg(feature = "pci")]
@@ -38,6 +45,7 @@ pub fn register_filesystem(mut blk: VirtioBlkDriver) {
 	unsafe {
 		FS.write(Filesystem::mount(ALLOC.assume_init_mut(), BLK.assume_init_mut()).unwrap());
 		FILES.write(FileInfo::new());
+		DIRS.write(DirInfo::new());
 	}
 }
 
@@ -74,11 +82,78 @@ fn files_mut() -> &'static mut FileInfo {
 fn files_ref() -> &'static FileInfo {
 	unsafe { FILES.assume_init_ref() }
 }
+fn dirs_mut() -> &'static mut DirInfo {
+	unsafe { DIRS.assume_init_mut() }
+}
+
+fn dirs_ref() -> &'static DirInfo {
+	unsafe { DIRS.assume_init_ref() }
+}
 type FT = File<'static, 'static, VirtioBlkDriver>;
+type FD = ReadDir<'static, 'static, VirtioBlkDriver>;
 type FA = FileAllocation<VirtioBlkDriver>;
+type DA = ReadDirAllocation;
 struct FileInfo {
 	alloc: [MaybeUninit<RefCell<FA>>; FILE_TABLE_SIZE],
 	files: [Option<FT>; FILE_TABLE_SIZE],
+}
+
+struct DirInfo {
+	alloc: [MaybeUninit<RefCell<DA>>; FILE_TABLE_SIZE],
+	dirs: [Option<FD>; FILE_TABLE_SIZE],
+}
+
+pub type DirDescriptor = i32;
+
+impl DirInfo {
+	const INIT: Option<FD> = None;
+
+	fn new() -> Self {
+		let mut d = Self {
+			alloc: MaybeUninit::uninit_array(),
+			dirs: [Self::INIT; FILE_TABLE_SIZE],
+		};
+
+		for i in 0..FILE_TABLE_SIZE {
+			d.alloc[i].write(RefCell::default());
+		}
+		d
+	}
+	fn alloc_dd(&'static mut self) -> Option<(DirDescriptor, &'static mut DA)> {
+		unsafe {
+			for dd in 0..FILE_TABLE_SIZE {
+				if self.dirs[dd as usize].is_none() {
+					return Some((
+						dd as DirDescriptor,
+						self.alloc[dd as usize].assume_init_mut().get_mut(),
+					));
+				}
+			}
+		}
+		None
+	}
+
+	fn set_dir(&mut self, dd: DirDescriptor, dir: FD) {
+		let i = dd as usize;
+		assert!(self.dirs[i].is_none());
+		self.dirs[i] = Some(dir);
+	}
+
+	fn rm_dir(&mut self, dd: DirDescriptor) {
+		let i = dd as usize;
+		let _ = self.dirs[i].take().unwrap();
+
+		unsafe {
+			let alloc: *mut DA = self.alloc[i].assume_init_mut().as_ptr();
+			alloc.write_bytes(0u8, 1);
+		}
+	}
+
+	fn next(&mut self, dd: DirDescriptor) -> Option<DirEntry> {
+		let i = dd as usize;
+		let dir = self.dirs[i].as_mut().unwrap().next()?.ok()?.clone();
+		Some(dir)
+	}
 }
 
 impl FileInfo {
@@ -120,14 +195,13 @@ impl FileInfo {
 
 	fn close_file(&mut self, fd: FileDescriptor) {
 		let i = fd as usize;
-		assert!(self.files[i].is_some());
 
 		unsafe {
 			let f = self.files[i].take().unwrap();
 			f.close().unwrap();
 
-			let alloc: *mut FA = self.alloc[i].assume_init_mut().get_mut();
-			alloc.write_bytes(0u8, size_of::<FA>());
+			let alloc: *mut FA = self.alloc[i].assume_init_mut().as_ptr();
+			alloc.write_bytes(0u8, 1);
 		}
 	}
 
@@ -170,7 +244,6 @@ impl LittleFs {
 		opt
 	}
 	pub fn open(&self, name: *const u8, flags: i32, mode: i32) -> Result<FileDescriptor, i32> {
-		info!("enter open");
 		unsafe {
 			let (fd, alloc) = files_mut().alloc_fd().unwrap();
 			let path = Path::from_cstr(CStr::from_ptr(name)).unwrap();
@@ -184,12 +257,21 @@ impl LittleFs {
 
 			files_mut().set_file(fd, f);
 
+			if flags & O_CREAT != 0 {
+				let rdonly = mode & O_RDONLY != 0;
+				let fa = FileAttr::new_file(rdonly);
+				let mut attr = Attribute::new(0);
+				attr.set_data(core::slice::from_raw_parts(
+					(&fa as *const FileAttr) as *const u8,
+					size_of::<FileAttr>(),
+				));
+				fs_ref().set_attribute(path, &attr).unwrap();
+			}
 			Ok(fd)
 		}
 	}
 
 	pub fn read(&self, fd: FileDescriptor, buf: *mut u8, len: usize) -> isize {
-		info!("read: {fd}, len: {len}");
 		unsafe {
 			let file = files_ref().get_file(fd).unwrap();
 
@@ -200,7 +282,6 @@ impl LittleFs {
 	}
 
 	pub fn write(&self, fd: FileDescriptor, buf: *const u8, len: usize) -> isize {
-		info!("write: {fd}, len: {len}");
 		unsafe {
 			let file = files_ref().get_file(fd).unwrap();
 			let b = core::slice::from_raw_parts(buf, len);
@@ -225,5 +306,64 @@ impl LittleFs {
 	pub fn close(&self, fd: FileDescriptor) -> i32 {
 		files_mut().close_file(fd);
 		0i32
+	}
+
+	pub fn mkdir(&self, name: *const u8, mode: u32) -> i32 {
+		unsafe {
+			let path = Path::from_cstr(CStr::from_ptr(name)).unwrap();
+			let ppath = path.join(Path::from_str_with_nul("..\0"));
+			let ret = fs_ref().create_dir(path).map_or_else(|_| -1i32, |_| 0i32);
+			if ret == 0 {
+				let fa = FileAttr::new_dir();
+				let mut attr = Attribute::new(0);
+				attr.set_data(core::slice::from_raw_parts(
+					(&fa as *const FileAttr) as *const u8,
+					size_of::<FileAttr>(),
+				));
+				fs_ref().set_attribute(path, &attr).unwrap();
+				fs_ref().set_attribute(ppath.deref(), &attr).unwrap();
+			}
+			ret
+		}
+	}
+	pub fn rmdir(&self, name: *const u8) -> i32 {
+		unsafe {
+			let path = Path::from_cstr(CStr::from_ptr(name)).unwrap();
+			fs_ref().remove_dir(path).map_or_else(|_| -1i32, |_| 0i32)
+		}
+	}
+
+	pub fn read_dir(&self, name: *const u8) -> Result<DirDescriptor, i32> {
+		let (dd, alloc) = dirs_mut().alloc_dd().ok_or(-1i32)?;
+		unsafe {
+			let path = Path::from_cstr(CStr::from_ptr(name)).unwrap();
+			let dir = fs_ref().read_dir(alloc, path).map_err(|_| -1i32)?;
+			
+			dirs_mut().set_dir(dd, dir);
+			return Ok(dd as DirDescriptor);
+		}
+	}
+
+	pub fn next_dir_entry(&self, dd: DirDescriptor, path: *mut u8, attr: *mut FileAttr) -> i32 {
+		if let Some(ref d) = dirs_mut().next(dd) {
+			unsafe {
+				let cs_without_null = d.path().as_str(); //without null
+				let p = d.path();
+				let len = cs_without_null.len();
+				core::ptr::copy(cs_without_null.as_ptr(), path, len);
+
+				let meta = fs_ref().metadata(p).unwrap();
+				let mut fa = fs_ref().attribute(p, 0).unwrap().unwrap();
+				let mut fp = ((fa.data().as_ptr()) as *const FileAttr)
+					.as_ref()
+					.unwrap()
+					.clone();
+				fp.set_size(meta.len());
+				core::ptr::copy((&fp) as *const FileAttr, attr, 1);
+			}
+			0i32
+		} else {
+			-1i32
+		}
 	}
 }
