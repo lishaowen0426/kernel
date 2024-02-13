@@ -402,7 +402,6 @@ pub(crate) fn opendir(name: *const u8) -> Result<FileDescriptor, i32> {
 	if env::is_uhyve() {
 		Err(-EINVAL)
 	} else {
-		#[cfg(target_arch = "x86_64")]
 		{
 			let name = unsafe { CStr::from_ptr(name as _) }.to_str().unwrap();
 			debug!("Open directory {}", name);
@@ -415,15 +414,12 @@ pub(crate) fn opendir(name: *const u8) -> Result<FileDescriptor, i32> {
 				if OBJECT_MAP.write().try_insert(fd, Arc::new(file)).is_err() {
 					Err(-EINVAL)
 				} else {
+					info!("open dir returns fd:{fd}");
 					Ok(fd as FileDescriptor)
 				}
 			} else {
 				Err(-EINVAL)
 			}
-		}
-		#[cfg(not(target_arch = "x86_64"))]
-		{
-			Err(-ENOSYS)
 		}
 	}
 }

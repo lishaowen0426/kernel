@@ -36,7 +36,7 @@ use crate::drivers::net::virtio_net::VirtioNetDriver;
 	all(any(feature = "tcp", feature = "udp"), not(feature = "rtl8139")),
 	feature = "fs"
 ))]
-use crate::drivers::virtio::transport::pci::VirtioDriver;
+use crate::drivers::virtio::transport::pci::{init_device, VirtioDriver};
 use crate::drivers::VirtioBlkDriver;
 use crate::fs;
 
@@ -751,7 +751,6 @@ pub(crate) fn init_virtio_drivers() {
 pub(crate) fn init_drivers() {
 	// virtio: 4.1.2 PCI Device Discovery
 	without_interrupts(|| {
-		/*
 		for adapter in unsafe {
 			PCI_DEVICES.iter().filter(|x| {
 				let (vendor_id, device_id) = x.id();
@@ -767,7 +766,7 @@ pub(crate) fn init_drivers() {
 				all(any(feature = "tcp", feature = "udp"), not(feature = "rtl8139")),
 				feature = "fs"
 			))]
-			match pci_virtio::init_device(adapter) {
+			match init_device(adapter) {
 				#[cfg(all(not(feature = "rtl8139"), any(feature = "tcp", feature = "udp")))]
 				Ok(VirtioDriver::Network(drv)) => {
 					register_driver(PciDriver::VirtioNet(InterruptTicketMutex::new(drv)))
@@ -779,8 +778,8 @@ pub(crate) fn init_drivers() {
 				_ => {}
 			}
 		}
-		*/
-		init_virtio_drivers();
+
+		//init_virtio_drivers();
 
 		// Searching for Realtek RTL8139, which is supported by Qemu
 		#[cfg(feature = "rtl8139")]

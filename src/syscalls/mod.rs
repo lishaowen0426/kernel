@@ -156,7 +156,8 @@ extern "C" fn __sys_stat(name: *const u8, stat: *mut FileAttr) -> i32 {
 
 #[no_mangle]
 pub extern "C" fn sys_stat(name: *const u8, stat: *mut FileAttr) -> i32 {
-	kernel_function!(__sys_stat(name, stat))
+	//kernel_function!(__sys_stat(name, stat))
+	LITTLEFS.stat(name, stat)
 }
 
 extern "C" fn __sys_lstat(name: *const u8, stat: *mut FileAttr) -> i32 {
@@ -184,11 +185,7 @@ extern "C" fn __sys_opendir(name: *const u8) -> FileDescriptor {
 
 #[no_mangle]
 pub extern "C" fn sys_opendir(name: *const u8) -> DirDescriptor {
-	//kernel_function!(__sys_opendir(name))
-	match LITTLEFS.read_dir(name) {
-		Ok(d) => d,
-		Err(e) => e,
-	}
+	kernel_function!(__sys_opendir(name))
 }
 
 extern "C" fn __sys_open(name: *const u8, flags: i32, mode: i32) -> FileDescriptor {
@@ -276,7 +273,9 @@ pub extern "C" fn sys_lseek(fd: FileDescriptor, offset: isize, whence: i32) -> i
 extern "C" fn __sys_readdir(fd: FileDescriptor) -> DirectoryEntry {
 	let obj = get_object(fd);
 	obj.map_or(DirectoryEntry::Invalid(-crate::errno::EINVAL), |v| {
-		(*v).readdir()
+		let res = (*v).readdir();
+		info!("after res {:?}",res);
+		res
 	})
 }
 

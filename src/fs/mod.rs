@@ -30,6 +30,7 @@ pub static mut FILES: MaybeUninit<FileInfo> = MaybeUninit::uninit();
 pub static mut DIRS: MaybeUninit<DirInfo> = MaybeUninit::uninit();
 
 pub fn init() {
+	info!("fuse filesystem init");
 	#[cfg(feature = "pci")]
 	fuse::init();
 }
@@ -338,7 +339,7 @@ impl LittleFs {
 		unsafe {
 			let path = Path::from_cstr(CStr::from_ptr(name)).unwrap();
 			let dir = fs_ref().read_dir(alloc, path).map_err(|_| -1i32)?;
-			
+
 			dirs_mut().set_dir(dd, dir);
 			return Ok(dd as DirDescriptor);
 		}
@@ -351,9 +352,13 @@ impl LittleFs {
 				let p = d.path();
 				let len = cs_without_null.len();
 				core::ptr::copy(cs_without_null.as_ptr(), path, len);
+				info!("path: {:?}", p);
 
 				let meta = fs_ref().metadata(p).unwrap();
-				let mut fa = fs_ref().attribute(p, 0).unwrap().unwrap();
+				let mut fa = fs_ref()
+					.attribute(p, 0)
+					.unwrap()
+					.unwrap_or(Attribute::new(0));
 				let mut fp = ((fa.data().as_ptr()) as *const FileAttr)
 					.as_ref()
 					.unwrap()
@@ -364,6 +369,19 @@ impl LittleFs {
 			0i32
 		} else {
 			-1i32
+		}
+	}
+
+	pub fn stat(&self, name: *const u8, stat: *mut FileAttr) -> i32 {
+		unsafe {
+			let path = Path::from_cstr(CStr::from_ptr(name)).unwrap();
+			let mut fa = fs_ref().attribute(path, 0).unwrap().unwrap();
+			let fp = ((fa.data().as_ptr()) as *const FileAttr)
+				.as_ref()
+				.unwrap()
+				.clone();
+			core::ptr::copy((&fp) as *const FileAttr, stat, 1);
+			0i32
 		}
 	}
 }
