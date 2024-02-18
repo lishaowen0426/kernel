@@ -156,8 +156,7 @@ extern "C" fn __sys_stat(name: *const u8, stat: *mut FileAttr) -> i32 {
 
 #[no_mangle]
 pub extern "C" fn sys_stat(name: *const u8, stat: *mut FileAttr) -> i32 {
-	//kernel_function!(__sys_stat(name, stat))
-	LITTLEFS.stat(name, stat)
+	kernel_function!(__sys_stat(name, stat))
 }
 
 extern "C" fn __sys_lstat(name: *const u8, stat: *mut FileAttr) -> i32 {

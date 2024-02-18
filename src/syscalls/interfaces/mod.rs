@@ -99,13 +99,8 @@ pub trait SyscallInterface: Send + Sync {
 			.map_or_else(|e| -num::ToPrimitive::to_i32(&e).unwrap(), |_| 0)
 	}
 
-	#[cfg(not(target_arch = "x86_64"))]
-	fn stat(&self, _name: *const u8, _stat: *mut FileAttr) -> i32 {
-		debug!("stat is unimplemented, returning -ENOSYS");
-		-ENOSYS
-	}
 
-	#[cfg(target_arch = "x86_64")]
+	#[cfg(any(target_arch = "x86_64", target_arch="aarch64"))]
 	fn stat(&self, name: *const u8, stat: *mut FileAttr) -> i32 {
 		let name = unsafe { CStr::from_ptr(name as _) }.to_str().unwrap();
 		debug!("stat {}", name);
